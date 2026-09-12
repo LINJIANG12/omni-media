@@ -1,0 +1,22 @@
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+
+# Media artifacts produced while slicing/probing locally
+*.m4a
+*.m4s
+*.mp3
+*.wav
+*.aac
+
+# Local caches & dev configs
+.pytest_cache/
+.omni-media/
+.vscode/
+.idea/

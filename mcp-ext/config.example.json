@@ -1,0 +1,39 @@
+{
+  "_note": "omni-media-ext 配置模板。复制为 config.json 后填入 api_key 即可；本服务只读配置文件，不读任何环境变量。",
+  "active": "gemini-flash",
+  "defaults": {
+    "slice_minutes": 10,
+    "max_payload_mb": 18,
+    "timeout_sec": 300,
+    "max_retries": 2,
+    "max_concurrency": 3
+  },
+  "endpoints": {
+    "gemini-flash": {
+      "protocol": "gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "api_key": "REPLACE_ME",
+      "model": "gemini-2.5-flash",
+      "headers": {}
+    },
+    "openai-audio": {
+      "protocol": "openai",
+      "openai_mode": "chat",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "REPLACE_ME",
+      "model": "gpt-4o-audio-preview",
+      "audio_format": "mp3",
+      "headers": {}
+    },
+    "whisper-compatible": {
+      "protocol": "openai",
+      "openai_mode": "transcriptions",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "REPLACE_ME",
+      "model": "whisper-1",
+      "text_model": "gpt-4o-mini",
+      "language": "zh",
+      "headers": {}
+    }
+  }
+}

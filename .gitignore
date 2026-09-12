@@ -1,0 +1,15 @@
+# 仓库根级兜底：只放两个服务共用的通用忽略项。
+#
+# ⚠️ 各子目录另有自己的 .gitignore，规则不要在这里重复定义。
+# ⚠️ `mcp-ext/config.json`（含明文 api_key）的排除规则**刻意留在** `mcp-ext/.gitignore`：
+#    它是凭证保护，不属于"通用缓存"一类；挪到这里或放宽它都会让真实密钥面临入库风险。
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
