@@ -1,8 +1,9 @@
 # 仓库根级兜底：只放两个服务共用的通用忽略项。
 #
-# ⚠️ 各子目录另有自己的 .gitignore，规则不要在这里重复定义。
-# ⚠️ `mcp-ext/config.json`（含明文 api_key）的排除规则**刻意留在** `mcp-ext/.gitignore`：
-#    它是凭证保护，不属于"通用缓存"一类；挪到这里或放宽它都会让真实密钥面临入库风险。
+# ⚠️ 各子目录另有自己的 .gitignore；此处几条缓存规则是**同向冗余**兜底，不要因为"重复"而删掉任一处。
+# 🔒 凭证兜底（**故意与 mcp-ext/.gitignore 重复**）：`config.json` 含明文 api_key。
+#    若唯一防线是子目录里的一行规则，则改名、挪位、误删规则或 `git add -f` 都能一击击穿；
+#    同向再加一道网，只加不减。
 
 __pycache__/
 *.py[cod]
@@ -13,3 +14,7 @@ dist/
 .venv/
 venv/
 .pytest_cache/
+
+# 本地实配（含明文 api_key）：只提交 config.example.json 模板
+config.json
+config.local.json
