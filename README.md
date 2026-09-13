@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](mcp/LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat-square)](#)
 [![MCP: >=1.0.0](https://img.shields.io/badge/MCP-%3E%3D1.0.0-blue.svg?style=flat-square)](#)
-[![配套技能: bili-video2book](https://img.shields.io/badge/配套技能-bili--video2book-111827?style=flat-square)](https://github.com/LINJIANG12/bili-video2book)
+[![配套技能: video2book](https://img.shields.io/badge/配套技能-video2book-111827?style=flat-square)](https://github.com/LINJIANG12/video2book)
 
 本仓库收纳两个互为补充的 MCP 服务，用于把长视频、系列网课与会议录音变成 Agent 真正"读过"的材料：
 
@@ -71,19 +71,19 @@ omni-media/
 
 ---
 
-## 🔗 配套技能：bili-video2book
+## 🔗 配套技能：video2book
 
-这两个服务是技能 **[bili-video2book](https://github.com/LINJIANG12/bili-video2book)** 的**阶段一听音通道**。
+这两个服务是技能 **[video2book](https://github.com/LINJIANG12/video2book)** 的**阶段一听音通道**。
 
-该技能把 B 站长视频 / 系列网课或本地音视频重构为结构化教材长文、模块合辑全书与思维导图复习笔记；
+该技能把 B 站、YouTube、抖音长视频 / 系列网课或本地音视频重构为结构化教材长文、模块合辑全书与思维导图复习笔记；
 它的阶段一要求"真正处理过本集音频"（不得跳过音频保真直接编造正文），而这一步正是通过挂载本仓库的
 任一服务完成——有原生音频模态的宿主走 `read_audio`，纯文本宿主走 `read_media`。
 
 | | |
 | :--- | :--- |
-| 技能仓库 | <https://github.com/LINJIANG12/bili-video2book> |
-| 听音通道与各宿主工具名映射 | 技能侧 `skills/bili-video2book/references/host-tools/` |
-| 技能侧运行前置 | Python 3.8+、系统 `ffmpeg`、以及本仓库任一服务提供的听音通道 |
+| 技能仓库 | <https://github.com/LINJIANG12/video2book> |
+| 听音通道与各宿主工具名映射 | 技能侧 `skills/video2book/references/host-tools/` |
+| 技能侧运行前置 | Python 3.10+、系统 `ffmpeg`、以及本仓库任一服务提供的听音通道 |
 
 **边界**：本仓库只提供 MCP 服务——不 import 技能代码，也不写技能产物（只读媒体、只写切片缓存）；
 反向同样成立，技能仓库从不 import 本包，两者仅通过 MCP 协议（`omni-media:read_audio` /

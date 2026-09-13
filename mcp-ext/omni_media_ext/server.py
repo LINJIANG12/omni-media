@@ -354,7 +354,7 @@ async def read_media(
 
     # ---- 返回契约（与原生听音版 read_audio **同构**）----
     # 分页字段一律沿用原生版的 `<!-- OMNI_STATUS: {...} -->` 与同一套键名/语义，
-    # 这样同一段调用方代码（例如 bili-video2book 的「is_finished=false 就按
+    # 这样同一段调用方代码（例如 video2book 的「is_finished=false 就按
     # next_start_time 续读」）在两个 MCP 之间可以无感切换。
     #
     # 注意 `mode` 一词在原生版里指**切片模式**（oneshot / chunked），因此本版本把

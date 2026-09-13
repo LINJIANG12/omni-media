@@ -18,7 +18,7 @@
 
 > **独立服务（与技能/产物互不打扰）**：本目录是 [`omni-media`](../) 仓库内的 `mcp/`，
 > 与同仓的 `mcp-ext/` 各自独立成包、可分开安装；整仓克隆后按上面的 `pip install -e .` 即可。
-> 它不 import 技能仓库（`bili-video2book` 的 `src/`）的任何代码，只依赖本机 `ffmpeg`；
+> 它不 import 技能仓库（`video2book` 的 `src/`）的任何代码，只依赖本机 `ffmpeg`；
 > 反向同样成立——技能仓库从不 import 本包，两者仅通过 MCP 协议（`omni-media:read_audio`）协作。
 > 产物与运行时状态由技能侧管理在**产物根**（默认 `<容器根>/output/`），本服务只读媒体、只写切片缓存。
 
