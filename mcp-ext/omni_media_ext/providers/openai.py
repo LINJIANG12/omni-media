@@ -37,7 +37,9 @@ from .base import (
     extract_text_content,
     http_post_json,
     http_request,
+    looks_like_model_meta,
     require_media_file,
+    upstream_hint,
 )
 
 # chat 模式里 input_audio 只认这两种容器。
@@ -168,6 +170,11 @@ class OpenAIEndpoint(BaseEndpoint):
         return text, str((choices[0] or {}).get("finish_reason", "") or "")
 
     # -- transcriptions 模式 ----------------------------------------------
+    _ASR_HINT = (
+        "请确认该端点确实提供 OpenAI 兼容的 /audio/transcriptions，"
+        "且 `model` 是转录模型（如 whisper-1）。"
+    )
+
     def build_transcription_form(
         self, target: Path
     ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, str, bytes]], str]:
@@ -186,26 +193,12 @@ class OpenAIEndpoint(BaseEndpoint):
         files = [("file", target.name, mime, target.read_bytes())]
         return fields, files, mime
 
-    def _transcribe(self, target: Path) -> str:
-        ensure_payload_size(target, self.payload_budget_bytes())
-        fields, files, _ = self.build_transcription_form(target)
-        body, content_type = build_multipart(fields, files)
+    @staticmethod
+    def _extract_transcript(status: int, raw: bytes) -> str:
+        """把 `/audio/transcriptions` 的响应体解析成逐字稿文本。
 
-        headers = self._headers(json_body=False)
-        headers["Content-Type"] = content_type
-
-        status, raw = http_request(
-            f"{self.endpoint.base_url}/audio/transcriptions",
-            method="POST",
-            headers=headers,
-            body=body,
-            timeout_sec=self.defaults.timeout_sec,
-            max_retries=self.defaults.max_retries,
-            hint=(
-                "请确认该端点确实提供 OpenAI 兼容的 /audio/transcriptions，"
-                "且 `model` 是转录模型（如 whisper-1）。"
-            ),
-        )
+        解析不了或内容为空时抛 `ProviderRequestError`——与拆分前的行为逐字一致。
+        """
         text = raw.decode("utf-8", errors="replace")
         try:
             parsed = json.loads(text) if text.strip().startswith("{") else {"text": text}
@@ -223,6 +216,59 @@ class OpenAIEndpoint(BaseEndpoint):
                 f"转录端点返回了无法解析的内容（HTTP {status}）: {text[:400]}"
             )
         raise ProviderRequestError(f"转录端点返回类型异常: {type(parsed).__name__}")
+
+    def _request_transcript(self, target: Path) -> str:
+        """发一次 `/audio/transcriptions` 并取回文本。
+
+        上游鉴权/配额失败时，把「去查 /audio/transcriptions 配置」这条会**把人带偏**的
+        提示换掉——实测网关 `GET /models` 返回 200，而转录全 503 token 获取失败。
+        """
+        fields, files, _ = self.build_transcription_form(target)
+        body, content_type = build_multipart(fields, files)
+
+        headers = self._headers(json_body=False)
+        headers["Content-Type"] = content_type
+
+        try:
+            status, raw = http_request(
+                f"{self.endpoint.base_url}/audio/transcriptions",
+                method="POST",
+                headers=headers,
+                body=body,
+                timeout_sec=self.defaults.timeout_sec,
+                max_retries=self.defaults.max_retries,
+                hint=self._ASR_HINT,
+            )
+        except ProviderRequestError as exc:
+            extra = upstream_hint(getattr(exc, "status", None), getattr(exc, "body", ""))
+            if not extra:
+                raise
+            cleaned = str(exc).replace(self._ASR_HINT, "").rstrip()
+            raise ProviderRequestError(
+                f"{cleaned}\n{extra}", status=exc.status, body=exc.body
+            ) from exc
+        return self._extract_transcript(status, raw)
+
+    def _transcribe(self, target: Path) -> str:
+        """取逐字稿；**元话语返回会被有限次重试，仍失败就报错**，绝不静默当成功。
+
+        为什么必须拦：外部模型偶尔把「自己的写作计划/自查清单」当结果返回（非空、
+        HTTP 200），下游会把它当成真实讲解内容写进教材——静默产出错内容比报错更糟。
+        重试次数沿用 `defaults.max_retries`，不新增配置项；成功路径只多一次头部扫描。
+        """
+        ensure_payload_size(target, self.payload_budget_bytes())
+        attempts = max(1, int(self.defaults.max_retries) + 1)
+        meta = ""
+        for _ in range(attempts):
+            text = self._request_transcript(target)
+            if not looks_like_model_meta(text):
+                return text
+            meta = text
+        raise ProviderRequestError(
+            f"转录端点连续 {attempts} 次返回模型自述的提纲/计划，而不是逐字稿（HTTP 200）: "
+            f"{meta[:200]}\n"
+            "建议：重试本片，或把 `duration_minutes` 调小（例如 5）后重读本片。"
+        )
 
     def _reason_over_transcript(self, prompt: str, transcript: str) -> Tuple[str, str]:
         """第二段：把逐字稿交给文本模型做总结/问答。"""

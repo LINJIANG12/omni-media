@@ -29,6 +29,96 @@ _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 # 单个 host 的探测/请求统一 UA，便于网关侧排查。
 _USER_AGENT = "omni-media-ext/0.1.0"
 
+# 外部模型偶尔**不转录**，而是把它自己的写作计划/自查清单当成结果返回
+# （实测：`Self-correction during drafting:` / `Segment 1: 00:05 - 00:12` /
+# `Key parts to double check:`）。这类返回非空、HTTP 200，因此能骗过“非空即成功”，
+# 被下游当作逐字稿使用。这里给出统一判据，供 provider 在返回前拦一道。
+META_TALK_MARKERS = (
+    "self-correction",
+    "transcribing chunk by chunk",
+    "transcribing each section",
+    "continue carefully transcribing",
+    "let's transcribe",
+    "the speaker gives a lecture",
+    "the user wants",
+    "key parts to double check",
+    "double-check all words",
+    "key terminology",
+    "key terms",
+    "ending time:",
+    "here is the transcript",
+    "the speech transcript",
+    "transcription aligns smoothly",
+)
+
+# 上游鉴权/配额失败的响应体特征。用于把「网关自己可达、但它连不上上游」
+# 与「请求参数/路径配错」区分开——两者的排查方向完全相反。
+UPSTREAM_FAILURE_MARKERS = (
+    "token acquisition",
+    "resource_exhausted",
+    "invalid_grant",
+    "unauthorized",
+    "deadlock",
+    "quota",
+    "oauth",
+    "refresh",
+)
+
+# 尾部窗口：元话语返回的最后一段通常还带一句英文收尾（如
+# `Transcribing chunk by chunk with proper punctuation, ensuring accuracy.`），
+# 而真稿里偶尔残留的英文元话语前缀只出现在**开头**。这条差异是本判据的支点。
+_META_TAIL_CHARS = 400
+
+_UPSTREAM_HINT = (
+    "这条错误来自端点的**上游**：网关本身可达（`GET /models` 可能是 200），"
+    "但它拿不到上游凭证或上游不可达。请先确认本机代理/加速器在运行、且能连上上游，"
+    "而不要去改 `/audio/transcriptions` 相关配置——那不是原因。"
+)
+
+
+def count_meta_markers(text: str) -> int:
+    """数一数这段文本里出现了几种英文转录指令语。"""
+    low = (text or "").strip().lower()
+    return sum(1 for marker in META_TALK_MARKERS if marker in low)
+
+
+def looks_like_model_meta(text: str) -> bool:
+    """判断这段返回是不是模型自述的提纲/计划，而不是真实转录内容。
+
+    判据：同一份返回里出现 **>=2 处**英文转录指令语，**或**尾部出现 1 处。
+
+    为什么不用「中文占比低」这类阈值：实测元话语样本里同样夹着大量中文清单
+    （P32 那份头部中文占比 68.8%），而正常逐字稿头部中文占比在 62%~84%——
+    两者在占比上不可分，用量化阈值只会既漏判又误杀。
+
+    为什么要求 >=2 处：真稿里偶尔残留一句英文元话语前缀（实测 P05 的
+    `The speech transcript is as follows:`），但它只出现在开头；元话语返回则头尾
+    都带指令语。宁可漏判也不能误杀——把真稿判成元话语会让可用语料被丢弃。
+
+    校准（本判据落地时实测）：3 份真实元话语样本全部命中；同一门课 34 份真稿零误杀。
+    """
+    probe = (text or "").strip()
+    if not probe:
+        return False
+    if count_meta_markers(probe) >= 2:
+        return True
+    # 尾部判据只在文本足够长时才生效：否则「尾部窗口」与开头重叠，
+    # 真稿开头那一句残留前缀会把它自己顶成尾部命中（实测短文夹具上就是这样误杀的）。
+    if len(probe) >= 2 * _META_TAIL_CHARS:
+        tail = probe[-_META_TAIL_CHARS:].lower()
+        return any(marker in tail for marker in META_TALK_MARKERS)
+    return False
+
+
+def upstream_hint(status: Optional[int], body: str) -> str:
+    """上游失败时给出可操作提示；不匹配则返回空串（调用方沿用原有提示）。"""
+    if status not in (502, 503, 504):
+        return ""
+    probe = (body or "").lower()
+    if not any(marker in probe for marker in UPSTREAM_FAILURE_MARKERS):
+        return ""
+    return _UPSTREAM_HINT
+
 
 class ProviderRequestError(RuntimeError):
     """外部端点请求失败（含 HTTP 状态码与响应体摘要）。"""
