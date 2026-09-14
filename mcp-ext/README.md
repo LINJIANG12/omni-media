@@ -234,6 +234,11 @@ omni-media-ext status --probe     # 诊断环境 + 端点可达性
 未读完时状态注释里会多出 `next_start_time` / `next_duration_minutes`；
 切片被载荷预算收窄时 `clamped: true`，正文后另有一条说明。
 
+> **返回内容会被校验一次。** 外部模型偶尔把**自己的写作提纲 / 自查清单**当成结果返回
+> （HTTP 200、内容非空），因此 `mode="transcribe"` 在返回前会判一遍：命中即视为无效，
+> 在 `max_retries` 范围内自动重读；仍失败则报错，**不会把提纲静默当成逐字稿**交给调用方
+> （逐字稿往往是下游撰写教材的唯一事实来源，静默产出错内容比报错更糟）。
+
 ### `inspect_media`
 
 毫秒级本地探测（ffprobe）时长、编码、轨道、体积与 token 预算，**不联网、不需要任何凭证**，
@@ -311,6 +316,8 @@ python test_mcp_read_media.py "<音频>" --duration 1     # 真端点实测（�
 | `端点返回 HTTP 404` | `base_url` 少写或写错前缀（Gemini 要 `/v1beta`，OpenAI 要 `/v1`），或 `model` 名不存在 |
 | `若该端点不支持 input_audio，请把 openai_mode 改成 transcriptions` | 第三方兼容端点常不支持 `input_audio`，改走 `/audio/transcriptions` |
 | `HTTP 429/5xx` 后失败 | 已按 `max_retries` 指数退避重试；仍失败就调大 `max_retries` 或降低并发 |
+| `转录端点连续 N 次返回模型自述的提纲/计划，而不是逐字稿` | 上游模型的偶发行为（实测同一集连错 3 次）。服务已在 `max_retries` 内自动重读；仍失败就重试本片，或把 `duration_minutes` 调小（例如 5）后重读本片 |
+| 报错里出现「这条错误来自端点的**上游**」 | 网关**自己**可达（`status --probe` 也会报可达——它只发 `GET /models`），但它拿不到上游凭证、或上游不可达。先确认本机代理/加速器在运行且能连上上游；**不要**去改 `/audio/transcriptions`、`model` 等配置，那不是原因。此时重跑不会变好，别反复重试 |
 | 正文被截断、状态里 `finish_reason: MAX_TOKENS` | 调小 `duration_minutes` 重读本片 |
 | 状态里 `clamped: true` | 切片被 `max_payload_mb` 收窄了，按续读参数继续即可 |
 | 行内公式显示成 `$…$` 源码 | 阅读侧一次性设置：Typora → 偏好设置 → Markdown → 勾选「内联公式」 |
