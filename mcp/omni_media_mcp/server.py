@@ -25,6 +25,8 @@ try:
 except ImportError:
     from mcp.server.fastmcp import Audio, Context, FastMCP as MCPServer
 
+from mcp.types import ToolAnnotations
+
 from .core.inspector import MediaInspector
 from .core.limits import (
     DEFAULT_SAFE_SLICE_MINUTES,
@@ -49,7 +51,14 @@ mcp = MCPServer(
     instructions="通用反重力式多模态音视频直读 MCP 服务。原生支持全模态大模型对音频、视频直接进行理解、长文重构与抗幻觉问答。",
 )
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def read_audio(
     file_path: Annotated[str, Field(description="本地音频或视频文件的绝对路径")],
     start_time: Annotated[
@@ -288,7 +297,14 @@ async def read_audio(
 
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def inspect_media(
     file_path: Annotated[str, Field(description="本地音视频文件绝对路径")],
 ) -> str:

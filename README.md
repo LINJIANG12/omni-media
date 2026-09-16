@@ -3,6 +3,7 @@
 > **同一岗位的两种实现**：宿主自己听得见，就把切片交给宿主听（零凭证）；宿主只有文本能力，就由服务调外部模型代读（配置驱动）。
 > 两条通道**分页契约同构**——同一套状态注释、同一套字段、同一套续读循环，切换只需换工具名。
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/linjiang12-omni-media-10kel3?v=4b27fe05e0f109966d63ae1f07557b12)](https://m8ven.ai/mcp/linjiang12-omni-media-10kel3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](mcp/LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat-square)](#)
 [![MCP: >=1.0.0](https://img.shields.io/badge/MCP-%3E%3D1.0.0-blue.svg?style=flat-square)](#)

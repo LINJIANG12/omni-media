@@ -112,6 +112,25 @@ def check_tool_contract():
     asyncio.run(_run())
 
 
+def check_tool_annotations():
+    """工具必须配置完整的 ToolAnnotations 提示（四大提示均为布尔值）。"""
+    from omni_media_mcp import server
+
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    for name in ("read_audio", "inspect_media"):
+        assert name in tools, f"工具 {name} 未注册"
+        ann = tools[name].annotations
+        assert ann is not None, f"工具 {name} 缺少 ToolAnnotations"
+        assert isinstance(ann.read_only_hint, bool), f"{name}.readOnlyHint 必须是 bool"
+        assert isinstance(ann.destructive_hint, bool), f"{name}.destructiveHint 必须是 bool"
+        assert isinstance(ann.idempotent_hint, bool), f"{name}.idempotentHint 必须是 bool"
+        assert isinstance(ann.open_world_hint, bool), f"{name}.openWorldHint 必须是 bool"
+        assert ann.read_only_hint is True, f"{name}.readOnlyHint 应为 True"
+        assert ann.destructive_hint is False, f"{name}.destructiveHint 应为 False"
+        assert ann.idempotent_hint is True, f"{name}.idempotentHint 应为 True"
+        assert ann.open_world_hint is False, f"{name}.openWorldHint 应为 False"
+
+
 def check_dead_layers_removed():
     for rel in (
         "omni_media_mcp/installer.py",
@@ -239,6 +258,7 @@ def main() -> int:
     check("模块导入与 CLI 入口", check_imports_and_cli)
     check("资源安全 limits 齐备", check_limits)
     check("工具契约（read_audio / inspect_media）", check_tool_contract)
+    check("工具提示注解（ToolAnnotations 四大提示）", check_tool_annotations)
     check("废弃云委托层已移除", check_dead_layers_removed)
     check("宿主适配器零凭证 + PYTHONPATH", check_adapters_are_credential_free)
     check("Codex 适配器不写入当前工作目录", check_codex_skill_not_writing_cwd)

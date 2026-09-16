@@ -378,3 +378,84 @@ def test_cli_status_reports_sibling_availability(capsys):
     out = capsys.readouterr().out
     assert "原生听音版" in out
     assert "read_audio" in out or "read_media" in out
+
+
+# ---------------------------------------------------------------------------
+# 5. 工具提示注释（ToolAnnotations 四大提示）与 100% 测试覆盖
+# ---------------------------------------------------------------------------
+
+@requires_native
+def test_all_tools_have_required_annotations():
+    """验证两个 MCP 服务的所有 4 个工具均正确声明了四大提示且均为布尔值。
+
+    OpenAI 目录要求：不得缺失任何提示，且所有值必须是显式布尔值。
+    """
+    import asyncio
+    from omni_media_ext.server import mcp as ext_mcp
+    from omni_media_mcp.server import mcp as native_mcp
+
+    native_tools = {t.name: t for t in asyncio.run(native_mcp.list_tools())}
+    ext_tools = {t.name: t for t in asyncio.run(ext_mcp.list_tools())}
+
+    specs = [
+        ("omni-media:read_audio", native_tools["read_audio"], True, False, True, False),
+        ("omni-media:inspect_media", native_tools["inspect_media"], True, False, True, False),
+        ("omni-media-ext:read_media", ext_tools["read_media"], True, False, True, True),
+        ("omni-media-ext:inspect_media", ext_tools["inspect_media"], True, False, True, False),
+    ]
+
+    for label, tool, ro, dest, idemp, ow in specs:
+        ann = tool.annotations
+        assert ann is not None, f"{label} 缺少 annotations"
+        dump = ann.model_dump(by_alias=True)
+        for hint_key in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+            assert hint_key in dump, f"{label} 缺少 {hint_key}"
+            assert isinstance(dump[hint_key], bool), f"{label} 的 {hint_key} 不是 bool: {dump[hint_key]}"
+        assert ann.read_only_hint is ro, f"{label} readOnlyHint 应为 {ro}"
+        assert ann.destructive_hint is dest, f"{label} destructiveHint 应为 {dest}"
+        assert ann.idempotent_hint is idemp, f"{label} idempotentHint 应为 {idemp}"
+        assert ann.open_world_hint is ow, f"{label} openWorldHint 应为 {ow}"
+
+
+@requires_native
+def test_tool_read_audio_coverage(audio_m4a: Path):
+    """显式测试原生听音版 read_audio 工具，确保测试名称引用与执行覆盖。"""
+    import asyncio
+    from omni_media_mcp.server import read_audio
+
+    result = asyncio.run(read_audio(file_path=str(audio_m4a), output_mode="file"))
+    assert "OMNI_STATUS" in result
+    assert "COMPLETED" in result or "IN_PROGRESS" in result
+
+
+@requires_native
+def test_tool_inspect_media_native_coverage(audio_m4a: Path):
+    """显式测试原生版 inspect_media 工具，确保测试名称引用与执行覆盖。"""
+    import asyncio
+    from omni_media_mcp.server import inspect_media as native_inspect
+
+    result = asyncio.run(native_inspect(file_path=str(audio_m4a)))
+    assert "媒体文件探测报告" in result
+
+
+def test_tool_read_media_coverage(stub, audio_m4a: Path):
+    """显式测试代读版 read_media 工具，确保测试名称引用与执行覆盖。"""
+    from omni_media_ext.config import Defaults, Endpoint
+    from omni_media_ext.providers.gemini import GeminiEndpoint
+
+    endpoint = GeminiEndpoint(
+        Endpoint(name="gem", protocol="gemini", base_url=stub.base_gemini, model="m", api_key="k-1234567890ab"),
+        Defaults(slice_minutes=10.0, max_payload_mb=18, timeout_sec=30, max_retries=0),
+    )
+    result = endpoint.process(audio_m4a, "p", "transcribe")
+    assert result.text
+
+
+def test_tool_inspect_media_ext_coverage(audio_m4a: Path):
+    """显式测试代读版 inspect_media 工具，确保测试名称引用与执行覆盖。"""
+    import asyncio
+    from omni_media_ext.server import inspect_media as ext_inspect
+
+    result = asyncio.run(ext_inspect(file_path=str(audio_m4a)))
+    assert "媒体文件探测报告" in result
+

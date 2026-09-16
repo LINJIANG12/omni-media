@@ -185,6 +185,32 @@ def check_tools_translate_errors() -> str:
     return "read_media / inspect_media 均带 @surfaced"
 
 
+def check_tool_annotations() -> str:
+    """两个工具都必须配置完整的 ToolAnnotations 提示（四大提示均为布尔值）。"""
+    import asyncio
+    from omni_media_ext.server import mcp
+
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    assert tools.keys() == {"read_media", "inspect_media"}
+
+    expected = {
+        "read_media": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+        "inspect_media": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    }
+    for name, exp in expected.items():
+        ann = tools[name].annotations
+        assert ann is not None, f"工具 {name} 缺少 ToolAnnotations"
+        assert isinstance(ann.read_only_hint, bool), f"{name}.readOnlyHint 必须是 bool"
+        assert isinstance(ann.destructive_hint, bool), f"{name}.destructiveHint 必须是 bool"
+        assert isinstance(ann.idempotent_hint, bool), f"{name}.idempotentHint 必须是 bool"
+        assert isinstance(ann.open_world_hint, bool), f"{name}.openWorldHint 必须是 bool"
+        assert ann.read_only_hint is exp["readOnlyHint"], f"{name}.readOnlyHint 应为 {exp['readOnlyHint']}"
+        assert ann.destructive_hint is exp["destructiveHint"], f"{name}.destructiveHint 应为 {exp['destructiveHint']}"
+        assert ann.idempotent_hint is exp["idempotentHint"], f"{name}.idempotentHint 应为 {exp['idempotentHint']}"
+        assert ann.open_world_hint is exp["openWorldHint"], f"{name}.openWorldHint 应为 {exp['openWorldHint']}"
+    return "read_media (openWorld=True) / inspect_media (openWorld=False) 均带全量布尔提示"
+
+
 # ---------------------------------------------------------------------------
 # 3. 配置来源纪律
 # ---------------------------------------------------------------------------
@@ -458,6 +484,7 @@ def main() -> int:
     check("模块导入与 CLI 入口", check_imports_and_cli)
     check("版本号一致（pyproject / __init__）", check_config_matches_pyproject_version)
     check("工具面契约（read_media / inspect_media）", check_tool_surface)
+    check("工具提示注解（ToolAnnotations 四大提示）", check_tool_annotations)
     check("工具错误可透传（@surfaced）", check_tools_translate_errors)
     check("配置只来自文件（无凭证环境变量）", check_no_credential_env_reads)
     check("配置查找与 cwd 无关", check_config_lookup_is_cwd_independent)

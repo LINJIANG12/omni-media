@@ -32,6 +32,8 @@ except ImportError:  # mcp 1.x（FastMCP 时代）的兼容路径
     from mcp.server.fastmcp import Context, FastMCP as MCPServer
     from mcp.server.fastmcp.exceptions import ToolError
 
+from mcp.types import ToolAnnotations
+
 from .config import Config, ConfigError, load_config
 from .core.inspector import MediaInspector
 from .core.limits import (
@@ -190,7 +192,14 @@ def _is_16k_mono(meta: Any) -> bool:
 # 工具
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+)
 @surfaced
 async def read_media(
     file_path: Annotated[str, Field(description="本地音频或视频文件的绝对路径")],
@@ -416,7 +425,14 @@ async def read_media(
     return "\n".join(blocks)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 @surfaced
 async def inspect_media(
     file_path: Annotated[str, Field(description="本地音视频文件绝对路径")],

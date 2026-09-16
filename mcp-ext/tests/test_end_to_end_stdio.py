@@ -132,6 +132,18 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
                 "file_path", "mode", "instruction", "endpoint", "start_time", "duration_minutes"
             }
             assert schema["required"] == ["file_path"]
+            assert read_tool.annotations is not None
+            assert read_tool.annotations.read_only_hint is True
+            assert read_tool.annotations.destructive_hint is False
+            assert read_tool.annotations.idempotent_hint is True
+            assert read_tool.annotations.open_world_hint is True
+
+            inspect_tool = next(t for t in tools.tools if t.name == "inspect_media")
+            assert inspect_tool.annotations is not None
+            assert inspect_tool.annotations.read_only_hint is True
+            assert inspect_tool.annotations.destructive_hint is False
+            assert inspect_tool.annotations.idempotent_hint is True
+            assert inspect_tool.annotations.open_world_hint is False
 
             # ---- 2. 资源：脱敏端点清单 ----
             resources = await session.list_resources()
