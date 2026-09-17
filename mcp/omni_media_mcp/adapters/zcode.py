@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import copy
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .base import BaseHostAdapter, get_default_env_vars
+from .base import BaseHostAdapter, build_stdio_entry
 
 
 class ZCodeAdapter(BaseHostAdapter):
@@ -41,13 +40,9 @@ class ZCodeAdapter(BaseHostAdapter):
         return cli_config
 
     def build_entry(self) -> Dict[str, Any]:
-        return {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "omni_media_mcp.server"],
-            "env": get_default_env_vars(),
-            "enabled": True,
-        }
+        entry = build_stdio_entry("omni_media_mcp.server")
+        entry.update({"type": "stdio", "enabled": True})
+        return entry
 
     def is_registered(self) -> bool:
         data = self.read_config()

@@ -60,7 +60,7 @@ def test_ext_identity_is_distinct():
     from omni_media_ext import __version__
     from omni_media_ext.config import CONFIG_FILENAME, USER_CONFIG_DIRNAME, repo_root
 
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.2.0"
 
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "omni-media-ext"' in pyproject
@@ -83,13 +83,13 @@ def test_both_distributions_can_coexist():
     except PackageNotFoundError:  # pragma: no cover - 未安装时不算失败
         pytest.skip("omni-media-ext 未安装")
 
-    assert ext.version == "0.1.0"
+    assert ext.version == "0.2.0"
     try:
         native = distribution("omni-media-mcp")
     except PackageNotFoundError:
         pytest.skip("原生版未安装，无需比对并存性")
 
-    assert native.version == "0.1.0"
+    assert native.version == "0.2.0"
     assert ext.metadata["Name"] != native.metadata["Name"]
 
 
@@ -208,6 +208,7 @@ def test_status_shared_keys_are_declared_and_emitted(stub, audio_m4a: Path):
 
     # 直接构造一段与 server.py 同构的注释，验证「正则 + 字段名」两边一致
     payload = {
+        "contract_version": 1,
         "status": "COMPLETED",
         "mode": "chunked",
         "is_finished": True,
@@ -221,6 +222,7 @@ def test_status_shared_keys_are_declared_and_emitted(stub, audio_m4a: Path):
     parsed = json.loads(match.group(2))
     for key in STATUS_SHARED_KEYS:
         assert key in parsed, f"共有字段缺失: {key}"
+    assert parsed["contract_version"] == 1
     assert parsed["mode"] in ("oneshot", "chunked"), "mode 必须是切片模式语义"
     assert set(STATUS_SHARED_CONTINUATION_KEYS) == {"next_start_time", "next_duration_minutes"}
 
@@ -458,4 +460,3 @@ def test_tool_inspect_media_ext_coverage(audio_m4a: Path):
 
     result = asyncio.run(ext_inspect(file_path=str(audio_m4a)))
     assert "媒体文件探测报告" in result
-

@@ -5,11 +5,11 @@
 1. **只用配置文件，不读任何环境变量**。查找顺序（首个存在者生效）::
 
        --config <路径>                     （CLI 参数；apply 时可写进宿主注册的 args）
-       <repo_root>/config.json             （包目录的父目录，由 __file__ 推导，不依赖 cwd）
-       ~/.omni-media-ext/config.json       （用户级）
+       源码 checkout: <repo_root>/config.json
+       非源码安装:   ~/.omni-media-ext/config.json
 
-   宿主拉起 MCP 服务时 cwd 是随机的，因此**不能**依赖相对路径；`repo_root()` 与
-   用户级路径都是绝对的，保证任何 cwd 下解析到同一份配置。
+   宿主拉起 MCP 服务时 cwd 是随机的，因此**不能**依赖相对路径；两个默认位置都是
+   绝对路径，保证安装形态确定后，任何 cwd 下解析到同一份配置。
 
 2. **JSONC 容忍注释**：允许 `//` 与 `/* */`，方便在配置里写说明。
 3. **加载期不校验密钥**：`inspect_media` / `config --validate` 在没有任何密钥时也必须
@@ -89,13 +89,29 @@ def user_config_path() -> Path:
     return Path.home() / USER_CONFIG_DIRNAME / CONFIG_FILENAME
 
 
+def is_source_checkout() -> bool:
+    """Whether this package is running from a source checkout rather than site-packages."""
+    root = repo_root()
+    return (root / "pyproject.toml").is_file() and (root / "omni_media_ext").is_dir()
+
+
+def default_config_path() -> Path:
+    """Preferred writable config path for the current installation shape."""
+    if is_source_checkout():
+        return repo_root() / CONFIG_FILENAME
+    return user_config_path()
+
+
 def candidate_paths(explicit: Optional[str | Path] = None) -> List[Path]:
     """返回按优先级排列的候选配置路径（含不存在的，用于报错时全量列出）。"""
     paths: List[Path] = []
     if explicit:
         paths.append(Path(explicit).expanduser().resolve())
-    paths.append(repo_root() / CONFIG_FILENAME)
-    paths.append(user_config_path())
+    preferred = default_config_path()
+    paths.append(preferred)
+    user_path = user_config_path()
+    if user_path != preferred:
+        paths.append(user_path)
     return paths
 
 

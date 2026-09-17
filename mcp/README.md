@@ -2,7 +2,7 @@
 
 > **零本地模型负担、零外部 API 凭证**：直接借用宿主多模态对话模型的音频感知能力，聆听长篇网课、学术讲座与会议录音。
 
-[![MCP 标准: 2024-11-05](https://img.shields.io/badge/MCP%20标准-FastMCP%202.2.0-blue.svg?style=flat-square)](#)
+[![MCP SDK: 2.1+](https://img.shields.io/badge/MCP%20SDK-2.1%2B-blue.svg?style=flat-square)](#)
 [![适配宿主: OpenCode | ZCode | DSH | Codex | Antigravity](https://img.shields.io/badge/适配宿主-OpenCode%20%7C%20ZCode%20%7C%20DSH%20%7C%20Codex%20%7C%20Antigravity-111827?style=flat-square)](#)
 [![凭证需求: 零 API Key](https://img.shields.io/badge/凭证需求-零%20API%20Key-2ea44f?style=flat-square)](#)
 
@@ -36,8 +36,10 @@
 ```bash
 # 1. 诊断环境依赖与各宿主挂载状态
 omni-media status
+omni-media print-config
 
-# 2. 显式接入指定宿主 (显示 Diff 预览，用户确认后安全写入)
+# 2. 任意 MCP 宿主：把 print-config 的 JSON 直接粘贴进宿主配置
+#    已知宿主也可显式自动接入 (显示 Diff 预览，用户确认后安全写入)
 omni-media apply --target zcode
 omni-media apply --target all --yes    # 非交互脚本模式
 
@@ -115,7 +117,7 @@ read_audio(
 切片文件返回时携带机器可读状态与续读提示：
 
 ```text
-<!-- OMNI_STATUS: {"status": "IN_PROGRESS", "is_finished": false, "next_start_time": "00:15:00", ...} -->
+<!-- OMNI_STATUS: {"contract_version": 1, "status": "IN_PROGRESS", "is_finished": false, "next_start_time": "00:15:00", ...} -->
 > ⏱️ 续读下一分卷参数: start_time="00:15:00", duration_minutes=15.0
 ```
 
@@ -142,6 +144,6 @@ Agent 仅需在下一轮调用中传入 `start_time="00:15:00"` 即可无缝衔�
 
 - **凭证**：无需任何 API Key，服务不读取、不存储、不传输任何密钥。
 - **系统依赖**：`ffmpeg`（含 `ffprobe`）需在 `PATH` 中；缺失时切片与探测功能不可用。
-- **Python 依赖**：仅 `mcp>=1.0.0`。
+- **Python 依赖**：`mcp>=2.1.0,<3`。
 - **可用但当前流程未调用的库方法**：`MediaPreprocessor.slice_video` / `extract_video_keyframes` / `compress_video_for_multimodal`
   属对外导出的工具函数，`read_audio` / `inspect_media` 两个 MCP 工具**不使用**它们；保留是为了给二次开发留接口，不是死代码。

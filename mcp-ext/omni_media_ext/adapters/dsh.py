@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import copy
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .base import BaseHostAdapter, get_default_env_vars
+from .base import BaseHostAdapter, build_stdio_entry
 
 
 class DshAdapter(BaseHostAdapter):
@@ -32,11 +31,7 @@ class DshAdapter(BaseHostAdapter):
         return Path.home() / ".dsh" / "config.json"
 
     def build_entry(self) -> Dict[str, Any]:
-        return {
-            "command": sys.executable,
-            "args": self.server_args(),
-            "env": get_default_env_vars(),
-        }
+        return build_stdio_entry("omni_media_ext.server", self.server_config)
 
     def is_registered(self) -> bool:
         data = self.read_config()

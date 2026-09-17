@@ -113,7 +113,7 @@ def check_imports_and_cli() -> str:
     from omni_media_ext import cli, config, prompts, server  # noqa: F401
     from omni_media_ext.providers import registry
 
-    assert omni_media_ext.__version__ == "0.1.0", f"版本号异常: {omni_media_ext.__version__}"
+    assert omni_media_ext.__version__ == "0.2.0", f"版本号异常: {omni_media_ext.__version__}"
     assert registry.list_protocols() == ["gemini", "openai"], registry.list_protocols()
 
     # CLI 无参数打印帮助并返回 0
@@ -123,6 +123,8 @@ def check_imports_and_cli() -> str:
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "omni-media-ext"' in pyproject, "发行名必须是 omni-media-ext（不能与原版同名）"
     assert "omni-media-ext = " in pyproject and "omni-media-ext-mcp = " in pyproject, "缺少 CLI 入口点"
+    assert 'version = "0.2.0"' in pyproject
+    assert '"mcp>=2.1.0,<3"' in pyproject
     assert 'name = "omni-media-mcp"' not in pyproject, "不得冒用原版发行名"
     return f"v{omni_media_ext.__version__}，协议 {registry.list_protocols()}"
 
@@ -313,15 +315,22 @@ def check_native_compat_contract() -> str:
     两版是同一岗位的两种实现，靠「同名同语义的分页状态注释 + 同名同型的切片参数」
     让调用方无感切换。这里守住契约里最容易在重构中被改坏的三处。
     """
-    from omni_media_ext.server import STATUS_SHARED_KEYS, STATUS_SHARED_CONTINUATION_KEYS, STATUS_TAG
+    from omni_media_ext.server import (
+        STATUS_CONTRACT_VERSION,
+        STATUS_SHARED_CONTINUATION_KEYS,
+        STATUS_SHARED_KEYS,
+        STATUS_TAG,
+    )
 
     assert STATUS_TAG == "OMNI_STATUS", f"分页标签必须与原生版同名，当前: {STATUS_TAG}"
+    assert STATUS_CONTRACT_VERSION == 1, STATUS_CONTRACT_VERSION
     assert STATUS_SHARED_KEYS == (
-        "status", "mode", "is_finished", "start_time", "end_time", "total_duration",
+        "contract_version", "status", "mode", "is_finished", "start_time", "end_time", "total_duration",
     ), STATUS_SHARED_KEYS
     assert set(STATUS_SHARED_CONTINUATION_KEYS) == {"next_start_time", "next_duration_minutes"}
 
     source = (PACKAGE_DIR / "server.py").read_text(encoding="utf-8")
+    assert '"contract_version": STATUS_CONTRACT_VERSION' in source
     # `mode` 在两版里都必须是切片模式语义；任务预设只能放 `task`（同名不同义会被静默误读）
     assert '"mode": "chunked" if is_sliced else "oneshot"' in source, "mode 必须是切片模式"
     assert '"task": mode_key' in source, "任务预设必须写进 task"

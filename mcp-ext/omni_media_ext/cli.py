@@ -20,11 +20,13 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
+from .adapters.base import build_generic_config
 from .adapters.registry import ADAPTER_MAP, get_adapter, get_all_adapters, list_supported_targets
 from .config import (
     Config,
     ConfigError,
     candidate_paths,
+    default_config_path,
     example_config_text,
     load_config,
     repo_root,
@@ -146,7 +148,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     try:
         import mcp as mcp_pkg
 
-        print(f"  {TAG_PASS} MCP SDK: {getattr(mcp_pkg, '__version__', '>=1.0.0')}")
+        print(f"  {TAG_PASS} MCP SDK: {getattr(mcp_pkg, '__version__', 'unknown')}")
     except Exception as exc:  # noqa: BLE001
         print(f"  {TAG_FAIL} MCP SDK: 未正确加载 ({exc})")
 
@@ -317,6 +319,18 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_print_config(args: argparse.Namespace) -> int:
+    """Print a host-neutral MCP stdio configuration and nothing else."""
+    print(
+        json.dumps(
+            build_generic_config(server_config=args.config),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # config
 # ---------------------------------------------------------------------------
@@ -327,12 +341,12 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     if args.init is not None:
         acted = True
-        # `--init` 不带值时 args.init == ""（argparse 的 const），必须落到仓库根，
-        # 不能拿空串去 Path() —— 那会解析成当前工作目录并试图把目录当文件写。
+        # `--init` 不带值时不能拿空串去 Path()；源码 checkout 写仓库根，
+        # site-packages 等非源码安装则写用户级配置目录。
         target = (
             Path(args.init).expanduser().resolve()
             if str(args.init).strip()
-            else (repo_root() / "config.json")
+            else default_config_path()
         )
         try:
             written = write_example_config(target, force=args.force)
@@ -380,6 +394,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     if not acted:
         print(f"{TAG_INFO} 配置模板: {repo_root() / 'config.example.json'}")
+        print(f"{TAG_INFO} 当前首选配置路径: {default_config_path()}")
         print(f"{TAG_INFO} 用户级默认路径: {user_config_path()}")
         print("用法示例:")
         print("  omni-media-ext config --init          # 在仓库根生成 config.json")
@@ -445,6 +460,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect = subparsers.add_parser("inspect", help="毫秒级探测音视频元数据与 Token 预估（本地）")
     p_inspect.add_argument("file", help="本地音视频文件路径")
     p_inspect.set_defaults(func=cmd_inspect)
+
+    p_print = subparsers.add_parser(
+        "print-config",
+        help="输出可粘贴到任意 MCP 宿主的标准 stdio 配置 JSON",
+    )
+    p_print.add_argument("--config", "-c", default=None, help=config_help)
+    p_print.set_defaults(func=cmd_print_config)
 
     p_config = subparsers.add_parser("config", help="配置文件的初始化 / 定位 / 校验 / 展示")
     p_config.add_argument("--config", "-c", default=None, help=config_help)

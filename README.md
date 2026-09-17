@@ -4,10 +4,12 @@
 > 两条通道**分页契约同构**——同一套状态注释、同一套字段、同一套续读循环，切换只需换工具名。
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/linjiang12-omni-media-10kel3?v=4b27fe05e0f109966d63ae1f07557b12)](https://m8ven.ai/mcp/linjiang12-omni-media-10kel3)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](mcp/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat-square)](#)
-[![MCP: >=1.0.0](https://img.shields.io/badge/MCP-%3E%3D1.0.0-blue.svg?style=flat-square)](#)
+[![MCP: >=2.1.0,<3](https://img.shields.io/badge/MCP-%3E%3D2.1.0%2C%3C3-blue.svg?style=flat-square)](#)
 [![配套技能: video2book](https://img.shields.io/badge/配套技能-video2book-111827?style=flat-square)](https://github.com/LINJIANG12/video2book)
+
+[简体中文](README.md) · [English](README.en.md)
 
 本仓库收纳两个互为补充的 MCP 服务，用于把长视频、系列网课与会议录音变成 Agent 真正"读过"的材料：
 
@@ -27,7 +29,7 @@
 
 ## 📦 安装
 
-两个服务各自独立安装。**Python ≥ 3.10**，Python 依赖只有 `mcp>=1.0.0`；音频切片另需系统 `ffmpeg`（含 `ffprobe`）。
+两个服务各自独立安装。**Python ≥ 3.10**，Python 依赖为 `mcp>=2.1.0,<3`；音频切片另需系统 `ffmpeg`（含 `ffprobe`）。正式分发渠道是 GitHub，不发布 PyPI wheel。
 
 ```bash
 # 原生听音版（零凭证）
@@ -41,11 +43,13 @@ cd mcp-ext && pip install -e .
 
 ```bash
 omni-media status                       # 诊断系统依赖 + 各宿主挂载状态与实际配置路径
+omni-media print-config                 # 输出任何 MCP 宿主都可粘贴的标准 stdio JSON
 omni-media apply --target codex         # 显式接入某宿主（先显示 Diff 预览再写入）
 omni-media apply --target all --yes     # 非交互脚本模式
 omni-media unapply --target codex       # 干净撤销，零残留
 
 omni-media-ext config --init            # 生成 config.json，填入端点与 api_key
+omni-media-ext print-config             # 输出外部模型代读版的标准 stdio JSON
 omni-media-ext status --probe           # 环境 + 配置 + 端点可达性 + 该挂哪一个
 ```
 
@@ -68,7 +72,7 @@ omni-media/
 ```
 
 **两个服务互不 import**，任一方缺席都不影响另一方。二者唯一的共同约定是分页与续读状态注释
-`<!-- OMNI_STATUS: {...} -->`——契约由 `mcp-ext/tests/test_compatibility.py` 与两侧 `selfcheck.py` 钉死。
+`<!-- OMNI_STATUS: {...} -->`，当前 `contract_version` 为 `1`——契约由 `mcp-ext/tests/test_compatibility.py` 与两侧 `selfcheck.py` 钉死。
 
 ---
 

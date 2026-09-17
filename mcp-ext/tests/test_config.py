@@ -50,12 +50,21 @@ def isolated_paths(tmp_path, monkeypatch):
     home_cfg = tmp_path / "home" / "config.json"
     monkeypatch.setattr(cfgmod, "repo_root", lambda: repo)
     monkeypatch.setattr(cfgmod, "user_config_path", lambda: home_cfg)
+    monkeypatch.setattr(cfgmod, "is_source_checkout", lambda: True)
     return repo, home_cfg
 
 
 # ---------------------------------------------------------------------------
 # 查找优先级
 # ---------------------------------------------------------------------------
+
+def test_installed_package_defaults_to_user_config(tmp_path, monkeypatch):
+    user_cfg = tmp_path / "home" / "config.json"
+    monkeypatch.setattr(cfgmod, "is_source_checkout", lambda: False)
+    monkeypatch.setattr(cfgmod, "user_config_path", lambda: user_cfg)
+    assert cfgmod.default_config_path() == user_cfg
+    assert cfgmod.candidate_paths() == [user_cfg]
+
 
 def test_precedence_explicit_wins(isolated_paths):
     repo, home_cfg = isolated_paths

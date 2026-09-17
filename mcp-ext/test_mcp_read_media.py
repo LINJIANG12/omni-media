@@ -125,11 +125,9 @@ async def main() -> int:
             if status_match:
                 print("状态注释:")
                 print(json.dumps(json.loads(status_match.group(1)), ensure_ascii=False, indent=2))
-            print("\n模型返回正文（前 2000 字符）:")
+            print("\n模型返回正文:")
             body = _STATUS_RE.sub("", text).strip()
-            print(body[:2000])
-            if len(body) > 2000:
-                print(f"\n... （正文共 {len(body)} 字符，已截断显示）")
+            print(body)
 
     print("\n*** 真端点端到端调用成功 ***")
     return 0

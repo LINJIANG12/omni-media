@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import copy
 import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .base import BaseHostAdapter, get_default_env_vars
+from .base import BaseHostAdapter, build_stdio_entry
 
 
 class OpenCodeAdapter(BaseHostAdapter):
@@ -44,13 +43,9 @@ class OpenCodeAdapter(BaseHostAdapter):
         return global_path
 
     def build_entry(self) -> Dict[str, Any]:
-        return {
-            "type": "local",
-            "command": sys.executable,
-            "args": self.server_args(),
-            "env": get_default_env_vars(),
-            "enabled": True,
-        }
+        entry = build_stdio_entry("omni_media_ext.server", self.server_config)
+        entry.update({"type": "local", "enabled": True})
+        return entry
 
     def is_registered(self) -> bool:
         data = self.read_config()

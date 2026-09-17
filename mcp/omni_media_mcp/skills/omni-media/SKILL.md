@@ -28,7 +28,7 @@ triggers:
   - `start_time` (string, 可选): 分页切片起始时间戳，格式如 `"00:00:00"`、`"00:15:00"` 或秒数。
   - `duration_minutes` (float, 可选): 单次读取切片时长预算（分钟）。**<= 75 分钟网课默认一次性完整就绪 (One-Shot)**；仅 > 75 分钟超长文件自动启动 30 分钟安全分卷调度。
   - `output_mode` (string, 可选): 回传通道。
-    - `'file'`：**（Codex / Antigravity Agent 默认与强力推荐）** 生成 16kHz 32k AAC 优化切片并返回本地绝对路径（若输入已是 16kHz 单声道则 0 秒极速直通原路径）。携带机器可读元数据 `<!-- OMNI_STATUS: ... -->`。宿主 Agent 可直接用 `view_file` 原生挂载并聆听。
+    - `'file'`：**（Codex / Antigravity Agent 默认与强力推荐）** 生成 16kHz 32k AAC 优化切片并返回本地绝对路径（若输入已是 16kHz 单声道则 0 秒极速直通原路径）。携带机器可读元数据 `<!-- OMNI_STATUS: ... -->`，其中 `contract_version` 为 `1`。宿主 Agent 可直接用 `view_file` 原生挂载并聆听。
     - `'inline'`：返回 FastMCP 原生 `Audio` 数据块（受 8MB 安全阈值保护，超过自动回退至 file 通道）。
     - `'auto'`：（默认）根据文件大小、编码与时长智能路由。
 
@@ -64,5 +64,5 @@ triggers:
 ## 3. 环境要求
 
 - 系统 `ffmpeg`（含 `ffprobe`）需在 `PATH` 中，用于切片与探测；
-- Python 依赖仅 `mcp>=1.0.0`；
+- Python 依赖为 `mcp>=2.1.0,<3`；
 - **无需任何 API Key 或联网凭证**。

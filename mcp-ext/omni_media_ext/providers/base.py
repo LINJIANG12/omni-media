@@ -27,7 +27,7 @@ from ..core.limits import ERROR_BODY_EXCERPT_CHARS
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 # 单个 host 的探测/请求统一 UA，便于网关侧排查。
-_USER_AGENT = "omni-media-ext/0.1.0"
+_USER_AGENT = "omni-media-ext/0.2.0"
 
 # 外部模型偶尔**不转录**，而是把它自己的写作计划/自查清单当成结果返回
 # （实测：`Self-correction during drafting:` / `Segment 1: 00:05 - 00:12` /

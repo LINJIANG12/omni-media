@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omni-media-ext"
-version = "0.1.0"
+version = "0.2.0"
 description = "Config-file driven multimodal audio/video reading MCP server: delegates transcription and analysis to external Gemini / OpenAI protocol endpoints"
 authors = [{ name = "OmniMedia Team" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=2.1.0,<3",
 ]
 
 [project.scripts]

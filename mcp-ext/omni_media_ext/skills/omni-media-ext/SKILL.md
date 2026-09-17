@@ -31,7 +31,7 @@ triggers:
 | 两者都没有 | 本技能用不了：需要先挂载 `omni-media-ext` 并写好配置文件 | —— |
 
 > **分页契约两版同构**：两条通道都用 `start_time` / `duration_minutes` 切片，返回文本都以
-> 同一行 `<!-- OMNI_STATUS: {...} -->` 注释开头（`is_finished` / `next_start_time` /
+> 同一行 `<!-- OMNI_STATUS: {...} -->` 注释开头（`contract_version: 1` / `is_finished` / `next_start_time` /
 > `next_duration_minutes` 同名同义）。因此**同一段续读循环在两个 MCP 之间可以无感切换**，
 > 你不需要为它们写两套逻辑。注意 `mode` 字段在两版里都表示**切片模式**（`oneshot` /
 > `chunked`），本版本的任务预设放在 `task` 字段里，别读错。
@@ -70,7 +70,7 @@ triggers:
 3. **解析状态注释**：返回文本首行是机器可读的（与原生听音版同名同义）
 
    ```text
-   <!-- OMNI_STATUS: {"status":"IN_PROGRESS","mode":"chunked","is_finished":false,"start_time":"00:00:00","end_time":"00:10:00","total_duration":"00:32:25","channel":"external-model","task":"transcribe","endpoint":"gemini-proxy","next_start_time":"00:10:00","next_duration_minutes":10.0} -->
+   <!-- OMNI_STATUS: {"contract_version":1,"status":"IN_PROGRESS","mode":"chunked","is_finished":false,"start_time":"00:00:00","end_time":"00:10:00","total_duration":"00:32:25","channel":"external-model","task":"transcribe","endpoint":"gemini-proxy","next_start_time":"00:10:00","next_duration_minutes":10.0} -->
    ```
 
    - `is_finished` / `next_start_time` / `next_duration_minutes` / `mode` 与原生版**同名同义**；

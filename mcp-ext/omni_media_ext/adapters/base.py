@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import difflib
 import json
-import os
 import re
 import sys
 from abc import ABC, abstractmethod
@@ -35,6 +34,30 @@ def get_default_env_vars() -> Dict[str, str]:
     proj_root = str(Path(__file__).resolve().parent.parent.parent)
     env_vars["PYTHONPATH"] = proj_root
     return env_vars
+
+
+def build_stdio_entry(
+    server_module: str,
+    server_config: Optional[str | Path] = None,
+) -> Dict[str, Any]:
+    """Build the canonical stdio entry used by adapters and `print-config`."""
+    args = ["-m", server_module]
+    if server_config:
+        args += ["--config", str(Path(server_config).expanduser().resolve())]
+    return {
+        "command": sys.executable,
+        "args": args,
+        "env": get_default_env_vars(),
+    }
+
+
+def build_generic_config(server_config: Optional[str | Path] = None) -> Dict[str, Any]:
+    """Return a host-neutral MCP configuration for any stdio-capable client."""
+    return {
+        "mcpServers": {
+            "omni-media-ext": build_stdio_entry("omni_media_ext.server", server_config),
+        }
+    }
 
 
 # JSON lines that assign an API_KEY env var, e.g.  "OPENAI_API_KEY": "sk-..."
@@ -76,11 +99,8 @@ class BaseHostAdapter(ABC):
         self.server_config = Path(server_config).resolve() if server_config else None
 
     def server_args(self) -> list[str]:
-        """MCP 服务启动参数；带 server_config 时附加 `--config <路径>`。"""
-        args = ["-m", "omni_media_ext.server"]
-        if self.server_config:
-            args += ["--config", str(self.server_config)]
-        return args
+        """Backward-compatible accessor for the canonical stdio arguments."""
+        return build_stdio_entry("omni_media_ext.server", self.server_config)["args"]
 
     @abstractmethod
     def get_config_path(self) -> Path:

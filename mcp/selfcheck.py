@@ -10,7 +10,7 @@
 3. 工具契约：非法入参抛类型化异常（FileNotFoundError / ValueError）；
 4. 只暴露 `read_audio` / `inspect_media`，废弃的云端委托链路（read_media/ask_media/probe_models
    与 provider / benchmark / installer / prompts 层）必须不复存在；
-5. 五个宿主适配器齐备，且 `build_entry()` 只注入 PYTHONPATH，不带任何 API Key；
+5. 五个宿主适配器与通用 `print-config` 共用标准 stdio 构造器，且不带任何 API Key；
 6. Codex 适配器默认把技能写到**用户级** `~/.agents/skills/`，不污染当前工作目录；
 7. 源码无硬编码本机绝对路径（AST 取字符串常量，跳过文档字符串里的示例）。
 
@@ -46,9 +46,16 @@ def check(name, fn):
 
 
 def check_imports_and_cli():
+    import omni_media_mcp
     import omni_media_mcp.server  # noqa: F401
     from omni_media_mcp.core.preprocessor import MediaPreprocessor  # noqa: F401
     from omni_media_mcp.adapters.registry import list_supported_targets
+
+    assert omni_media_mcp.__version__ == "0.2.0", f"版本号异常: {omni_media_mcp.__version__}"
+    pyproject = (MCP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'version = "0.2.0"' in pyproject
+    assert '"mcp>=2.1.0,<3"' in pyproject
+    assert 'omni_media_mcp = ["skills/**/*.md"]' in pyproject
 
     res = run_quiet(
         [sys.executable, "-m", "omni_media_mcp.cli", "status"],
@@ -137,9 +144,33 @@ def check_dead_layers_removed():
         "omni_media_mcp/providers",
         "omni_media_mcp/benchmarks",
         "omni_media_mcp/prompts.py",
-        "tests",
     ):
         assert not (MCP_ROOT / rel).exists(), f"{rel} 应已删除"
+
+
+def check_generic_config():
+    """通用配置、适配器和 print-config 必须共建同一条 stdio 入口。"""
+    import json
+
+    from omni_media_mcp.adapters.base import build_generic_config
+    from omni_media_mcp.adapters.codex import CodexAdapter
+
+    generic = build_generic_config()
+    entry = generic["mcpServers"]["omni-media"]
+    assert entry["args"] == ["-m", "omni_media_mcp.server"]
+    assert Path(entry["env"]["PYTHONPATH"]) == MCP_ROOT
+    assert CodexAdapter().build_entry()["args"] == entry["args"]
+
+    res = run_quiet(
+        [sys.executable, "-m", "omni_media_mcp.cli", "print-config"],
+        cwd=str(MCP_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=120,
+    )
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == generic
 
 
 def check_adapters_are_credential_free():
@@ -261,6 +292,7 @@ def main() -> int:
     check("工具提示注解（ToolAnnotations 四大提示）", check_tool_annotations)
     check("废弃云委托层已移除", check_dead_layers_removed)
     check("宿主适配器零凭证 + PYTHONPATH", check_adapters_are_credential_free)
+    check("通用 print-config 与适配器同源", check_generic_config)
     check("Codex 适配器不写入当前工作目录", check_codex_skill_not_writing_cwd)
     check("源码无硬编码本机路径", check_no_hardcoded_machine_paths)
     check("子进程统一走 run_quiet（无控制台弹窗）", check_no_console_window_spawn)

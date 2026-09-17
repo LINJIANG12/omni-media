@@ -68,8 +68,10 @@ _CONFIG_PATH: Optional[str] = None
 #   * 同样的续读循环（is_finished=false → 用 next_start_time 再调一次）。
 # 本版本独有的信息一律放在不与共有键冲突的扩展键里（channel / task / endpoint / …）。
 STATUS_TAG = "OMNI_STATUS"
+STATUS_CONTRACT_VERSION = 1
 
 STATUS_SHARED_KEYS = (
+    "contract_version",  # 跨项目行为契约主版本
     "status",           # COMPLETED | IN_PROGRESS
     "mode",             # 切片模式：oneshot（整篇一次读完）| chunked（分卷）
     "is_finished",      # 是否已读到媒体末尾
@@ -375,6 +377,7 @@ async def read_media(
     )
 
     status: Dict[str, Any] = {
+        "contract_version": STATUS_CONTRACT_VERSION,
         "status": "IN_PROGRESS" if plan["has_next"] else "COMPLETED",
         # 契约共有字段（与原生版逐字一致）
         "mode": "chunked" if is_sliced else "oneshot",

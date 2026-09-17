@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
+from .adapters.base import build_generic_config
 from .adapters.registry import ADAPTER_MAP, get_adapter, get_all_adapters, list_supported_targets
 from .core.inspector import MediaInspector
 from .core.proc import run_quiet
@@ -49,7 +51,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     # MCP library
     try:
         import mcp as mcp_pkg
-        mcp_ver = getattr(mcp_pkg, "__version__", ">=1.0.0")
+        mcp_ver = getattr(mcp_pkg, "__version__", "unknown")
         print(f"  {TAG_PASS} MCP SDK: {mcp_ver}")
     except Exception as e:
         print(f"  {TAG_FAIL} MCP SDK: 未正确加载 ({e})")
@@ -198,6 +200,12 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_print_config(args: argparse.Namespace) -> int:
+    """Print a host-neutral MCP stdio configuration and nothing else."""
+    print(json.dumps(build_generic_config(), ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="omni-media",
@@ -243,6 +251,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect = subparsers.add_parser("inspect", help="毫秒级探测音视频元数据与 Token 预估")
     p_inspect.add_argument("file", help="本地音视频文件路径")
     p_inspect.set_defaults(func=cmd_inspect)
+
+    # 6. print-config
+    p_print = subparsers.add_parser(
+        "print-config",
+        help="输出可粘贴到任意 MCP 宿主的标准 stdio 配置 JSON",
+    )
+    p_print.set_defaults(func=cmd_print_config)
 
     return parser
 

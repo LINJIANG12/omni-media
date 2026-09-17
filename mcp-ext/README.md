@@ -83,7 +83,7 @@ Agent 通过「自己的工具列表里有没有 `read_audio`」来判断，不�
 - **macOS**：`brew install ffmpeg`
 - **Linux (Debian/Ubuntu)**：`sudo apt update && sudo apt install -y ffmpeg`
 
-### 2. 安装（Python ≥ 3.10，依赖只有 `mcp`）
+### 2. 安装（Python ≥ 3.10，依赖为 `mcp>=2.1.0,<3`）
 
 ```bash
 cd mcp-ext
@@ -96,6 +96,7 @@ pip install -e .
 
 ```bash
 omni-media-ext config --init      # 在仓库根生成 config.json
+omni-media-ext print-config       # 输出任意 MCP 宿主可粘贴的标准 stdio JSON
 omni-media-ext config --path      # 打印实际生效的配置文件路径
 omni-media-ext config --validate  # 校验语法与字段
 omni-media-ext config --show      # 打印脱敏后的有效配置
@@ -105,10 +106,10 @@ omni-media-ext status --probe     # 诊断环境 + 端点可达性
 配置查找顺序（**首个存在者生效**，全部是绝对路径，与当前工作目录无关）：
 
 1. `--config <路径>`（CLI 参数；`apply --server-config <路径>` 可把它写进宿主注册的启动参数）
-2. `<仓库根>/config.json`
-3. `~/.omni-media-ext/config.json`
+2. 源码 checkout：`<仓库根>/config.json`
+3. 非源码安装：`~/.omni-media-ext/config.json`
 
-都不存在时报错会把三个候选路径全列出来。**加载期不校验密钥**：`inspect_media`、
+都不存在时报错会把候选路径全列出来。`config --init` 会按当前安装形态选择仓库根或用户级路径。**加载期不校验密钥**：`inspect_media`、
 `config --validate`、`status` 在没有密钥时都能用，只有真正要发请求时才要求凭证就绪。
 
 ### 4. 配置 schema
@@ -215,7 +216,7 @@ omni-media-ext status --probe     # 诊断环境 + 端点可达性
 返回是固定契约的 Markdown：
 
 ```text
-<!-- OMNI_STATUS: {"status":"COMPLETED|IN_PROGRESS","mode":"oneshot|chunked","is_finished":true,"start_time":"00:00:00","end_time":"00:10:00","total_duration":"00:32:25","channel":"external-model","task":"transcribe","endpoint":"gemini-proxy","protocol":"openai","model":"gemini-3.8-flash-high","elapsed_sec":42.1,"clamped":false} -->
+<!-- OMNI_STATUS: {"contract_version":1,"status":"COMPLETED|IN_PROGRESS","mode":"oneshot|chunked","is_finished":true,"start_time":"00:00:00","end_time":"00:10:00","total_duration":"00:32:25","channel":"external-model","task":"transcribe","endpoint":"gemini-proxy","protocol":"openai","model":"gemini-3.8-flash-high","elapsed_sec":42.1,"clamped":false} -->
 
 <模型返回正文>
 
@@ -255,6 +256,7 @@ omni-media-ext status --probe     # 诊断环境 + 端点可达性
 ```bash
 # 1. 诊断：环境 / 配置文件 / 端点（脱敏）/ 宿主挂载状态
 omni-media-ext status
+omni-media-ext print-config
 omni-media-ext status --probe          # 额外对每个端点 GET /models 探测可达性
 
 # 2. 配置治理（本服务唯一的配置入口）
@@ -290,8 +292,8 @@ omni-media-ext serve --config "D:/my/config.json"
 ## ✅ 测试与自检
 
 ```bash
-python selfcheck.py                     # 16 项静态不变量自检（离线、零密钥、无网络）
-python -m pytest tests/ -q              # 109 项：配置 / 协议载荷 / CLI 治理 / MCP 端到端 / 与原版兼容
+python selfcheck.py                     # 静态不变量自检（离线、零密钥、无网络）
+python -m pytest tests/ -q              # 配置 / 协议载荷 / CLI 治理 / MCP 端到端 / 与原版兼容
 python test_mcp_read_media.py "<音频>" --duration 1     # 真端点实测（需密钥，手动）
 ```
 
@@ -326,7 +328,7 @@ python test_mcp_read_media.py "<音频>" --duration 1     # 真端点实测（�
 
 ## 📦 依赖与凭证
 
-- **运行时依赖**：`mcp>=1.0.0`（仅此一项）。HTTP 走标准库 `urllib`，不引入 `google-genai` / `openai` / `httpx`。
+- **运行时依赖**：`mcp>=2.1.0,<3`（仅此一项）。HTTP 走标准库 `urllib`，不引入 `google-genai` / `openai` / `httpx`。
 - **系统依赖**：`ffmpeg`（含 `ffprobe`）。
 - **凭证**：只来自配置文件；源码里**不读任何 `*_API_KEY` 环境变量**（`selfcheck.py` 有硬断言）。
   `config.json` 已在 `.gitignore` 中排除，`status` / `config --show` / `media://endpoints` /

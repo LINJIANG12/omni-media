@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import difflib
 import json
-import os
 import re
 import sys
 from abc import ABC, abstractmethod
@@ -35,6 +34,30 @@ def get_default_env_vars() -> Dict[str, str]:
     proj_root = str(Path(__file__).resolve().parent.parent.parent)
     env_vars["PYTHONPATH"] = proj_root
     return env_vars
+
+
+def build_stdio_entry(
+    server_module: str,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Build the canonical stdio entry used by adapters and `print-config`."""
+    env = get_default_env_vars()
+    if extra_env:
+        env.update(extra_env)
+    return {
+        "command": sys.executable,
+        "args": ["-m", server_module],
+        "env": env,
+    }
+
+
+def build_generic_config() -> Dict[str, Any]:
+    """Return a host-neutral MCP configuration for any stdio-capable client."""
+    return {
+        "mcpServers": {
+            "omni-media": build_stdio_entry("omni_media_mcp.server"),
+        }
+    }
 
 
 # JSON lines that assign an API_KEY env var, e.g.  "OPENAI_API_KEY": "sk-..."

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import copy
 import shutil
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from .base import BaseHostAdapter, get_default_env_vars
+from .base import BaseHostAdapter, build_stdio_entry
 
 
 class CodexAdapter(BaseHostAdapter):
@@ -60,11 +59,7 @@ class CodexAdapter(BaseHostAdapter):
         # 原版 codex 适配器还会塞一个 `OMNI_MEDIA_OUTPUT_MODE=file`（那是为原生听音版的
         # 切片回传通道准备的旋钮）；本版本没有这个参数、也不会读它，注入一个死变量只会
         # 让宿主配置多一处误导，因此移除。
-        return {
-            "command": sys.executable,
-            "args": self.server_args(),
-            "env": get_default_env_vars(),
-        }
+        return build_stdio_entry("omni_media_ext.server", self.server_config)
 
     def is_registered(self) -> bool:
         data = self.read_config()
@@ -86,14 +81,15 @@ class CodexAdapter(BaseHostAdapter):
         return data
 
     def apply(self) -> Tuple[bool, str]:
-        ok, msg = super().apply()
-        # Install skill file
         bundled_skill = self.get_bundled_skill_path()
+        if not bundled_skill.is_file():
+            return False, f"内置技能文件缺失，拒绝报告接入成功: {bundled_skill}"
+
+        ok, msg = super().apply()
         target_skill = self.get_skill_target_path()
-        if bundled_skill.exists():
-            target_skill.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled_skill, target_skill)
-            msg += f" 并同步技能至: {target_skill}"
+        target_skill.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bundled_skill, target_skill)
+        msg += f" 并同步技能至: {target_skill}"
         return ok, msg
 
     def unapply(self) -> Tuple[bool, str]:

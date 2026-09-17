@@ -42,6 +42,8 @@ from .core.limits import (
 from .core.preprocessor import MediaPreprocessor
 from .core.temp_manager import ManagedTempDir
 
+STATUS_CONTRACT_VERSION = 1
+
 # Concurrency semaphore to throttle ffmpeg processes across async tasks
 _ASYNC_FFMPEG_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_FFMPEG)
 
@@ -216,6 +218,7 @@ async def read_audio(
             next_hint = "> ⏱️ **分页状态**: 全篇音频已就绪 (One-Shot 完成)。" if mode_tag == "oneshot" else "> ⏱️ **分页状态**: 全篇音频已切片完毕。"
 
         status_payload = {
+            "contract_version": STATUS_CONTRACT_VERSION,
             "status": "COMPLETED" if not has_next else "IN_PROGRESS",
             "mode": mode_tag,
             "is_finished": not has_next,

@@ -28,7 +28,7 @@ def test_config_init_writes_repo_template(tmp_path, monkeypatch, capsys):
     """`config --init`（不带值）必须写到仓库根，而不是当前工作目录。"""
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr(cli, "repo_root", lambda: repo)
+    monkeypatch.setattr(cli, "default_config_path", lambda: repo / "config.json")
 
     assert cli.main(["config", "--init", "--config", str(tmp_path / "none.json")]) == 0
     written = repo / "config.json"
@@ -82,6 +82,25 @@ def test_config_example_prints_template(capsys):
     assert json.loads(capsys.readouterr().out) == EXAMPLE_CONFIG
 
 
+def test_print_config_is_host_neutral_json(capsys):
+    assert cli.main(["print-config"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    entry = data["mcpServers"]["omni-media-ext"]
+    assert entry["args"] == ["-m", "omni_media_ext.server"]
+    assert set(entry["env"]) == {"PYTHONPATH"}
+    assert entry["command"]
+
+
+def test_print_config_can_include_server_config(tmp_path, capsys):
+    cfg = tmp_path / "service.json"
+    assert cli.main(["print-config", "--config", str(cfg)]) == 0
+    data = json.loads(capsys.readouterr().out)
+    entry = data["mcpServers"]["omni-media-ext"]
+    assert entry["args"] == [
+        "-m", "omni_media_ext.server", "--config", str(cfg.resolve()),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # apply / unapply
 # ---------------------------------------------------------------------------
@@ -133,6 +152,20 @@ def test_apply_skill_dir_is_honored_and_user_dir_untouched(host_config: Path, tm
     user_skill = Path.home() / ".agents" / "skills" / "omni-media-ext" / "SKILL.md"
     assert not user_skill.exists(), "不得写到用户级目录"
     assert json.loads(host_config.read_text(encoding="utf-8"))["mcpServers"]["omni-media-ext"]
+
+
+def test_codex_apply_rejects_missing_bundled_skill(tmp_path: Path, monkeypatch):
+    from omni_media_ext.adapters.codex import CodexAdapter
+
+    adapter = CodexAdapter(
+        custom_config_path=tmp_path / "codex.json",
+        custom_skill_dir=tmp_path / "skills",
+    )
+    monkeypatch.setattr(adapter, "get_bundled_skill_path", lambda: tmp_path / "missing.md")
+    ok, message = adapter.apply()
+    assert ok is False
+    assert "缺失" in message
+    assert not (tmp_path / "codex.json").exists()
 
 
 def test_apply_unknown_target_fails(host_config: Path, capsys):
