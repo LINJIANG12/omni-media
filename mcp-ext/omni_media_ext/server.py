@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import functools
 import json
+import re
 from pathlib import Path
 from typing import Annotated, Any, Callable, Dict, Optional
 
@@ -54,6 +55,9 @@ _ASYNC_FFMPEG_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_FFMPEG)
 
 # 切片体积预估用的人声码率（32kbps ≈ 4000 字节/秒）。
 _BYTES_PER_AUDIO_SEC = int(AUDIO_BITRATE_VOICE.rstrip("k")) * 1000 / 8
+
+# 行首时间戳（`[00:12:35]` / `[12:35]`，兼容全角方括号）：判断本次逐字稿是否带时间戳。
+_LEADING_TIMESTAMP_RE = re.compile(r"(?m)^\s*[\[【]\s*(?:\d{1,3}:)?\d{1,2}:\d{2}")
 
 # 由 --config 传入的显式配置路径；None 时走默认查找顺序。
 _CONFIG_PATH: Optional[str] = None
@@ -388,6 +392,9 @@ async def read_media(
         # 本版本扩展字段（原生版没有；命名不与共有字段冲突）
         "channel": "external-model",
         "task": mode_key,
+        # 本次文本是否带行首时间戳（由 verbose_json 的 engine segments 渲染而来）。
+        # false 说明端点不支持该格式、只回了纯文本 —— 下游据此决定能不能做分集切分。
+        "timestamps": bool(_LEADING_TIMESTAMP_RE.search(result.text or "")),
         "endpoint": result.endpoint_name,
         "protocol": result.protocol,
         "model": result.model,

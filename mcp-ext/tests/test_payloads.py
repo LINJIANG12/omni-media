@@ -297,12 +297,51 @@ def test_openai_transcription_form_shape(audio_m4a: Path):
     fields, files, mime = endpoint.build_transcription_form(audio_m4a)
 
     assert ("model", "whisper-1") in fields
-    assert ("response_format", "json") in fields
+    # 默认要 verbose_json：端点会连同 segments 一起返回，我们据此渲染行首时间戳
+    assert ("response_format", "verbose_json") in fields
+    # 回退格式必须仍然可用（端点不认 verbose_json 时走这一条）
+    assert ("response_format", "json") in endpoint.build_transcription_form(audio_m4a, "json")[0]
     name, filename, content_type, data = files[0]
     assert name == "file"
     assert filename == audio_m4a.name
     assert content_type == "audio/mp4" and mime == "audio/mp4"
     assert data == audio_m4a.read_bytes()
+
+
+def test_openai_transcription_falls_back_to_plain_json(audio_m4a: Path, monkeypatch):
+    """端点不认 verbose_json（4xx）时必须退回 json 再试一次，而不是让整门课停在这里。"""
+    from omni_media_ext.providers import openai as openai_mod
+
+    endpoint = openai_endpoint("https://example.invalid/v1", model="whisper-1", mode="transcriptions")
+    bodies = []
+
+    def fake_http_request(url, method="GET", headers=None, body=b"", **kwargs):
+        bodies.append(body)
+        if len(bodies) == 1:
+            raise ProviderRequestError(
+                "400 不支持的 response_format", status=400, body="bad response_format"
+            )
+        return 200, json.dumps({"text": "退化为纯文本的逐字稿"}).encode("utf-8")
+
+    monkeypatch.setattr(openai_mod, "http_request", fake_http_request)
+    result = endpoint.process(audio_m4a, "请转录", "transcribe")
+
+    assert result.text == "退化为纯文本的逐字稿"
+    assert len(bodies) == 2, "verbose_json 被拒后应恰好再试一次"
+    assert b'name="response_format"\r\n\r\nverbose_json\r\n' in bodies[0]
+    assert b'name="response_format"\r\n\r\njson\r\n' in bodies[1]
+
+
+def test_openai_transcript_renders_segments_and_plain_text():
+    """段级返回渲染成行首时间戳；只回纯文本时也要能出稿（时间戳降级为无）。"""
+    plain = json.dumps({"text": "纯文本逐字稿"}).encode("utf-8")
+    assert OpenAIEndpoint._extract_transcript(200, plain) == "纯文本逐字稿"
+
+    segs = json.dumps(
+        {"segments": [{"start": 0.0, "text": "第一段"}, {"start": 65.0, "text": "第二段"}]}
+    ).encode("utf-8")
+    rendered = OpenAIEndpoint._extract_transcript(200, segs)
+    assert rendered.splitlines() == ["[00:00:00] 第一段", "[00:01:05] 第二段"]
 
 
 def test_multipart_builder_structure():

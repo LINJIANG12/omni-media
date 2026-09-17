@@ -175,8 +175,13 @@ class OpenAIEndpoint(BaseEndpoint):
         "且 `model` 是转录模型（如 whisper-1）。"
     )
 
+    # 转录返回格式，按顺序尝试：`verbose_json` 会连同 segments 一起返回，我们据此渲染出
+    # 行首 `[HH:MM:SS]`（引擎的真实位置，不是模型猜的）；端点不认这个参数（4xx）时退回
+    # `json`（只有一整块纯文本），格式差异不该让整门课停在这里。
+    _ASR_FORMATS = ("verbose_json", "json")
+
     def build_transcription_form(
-        self, target: Path
+        self, target: Path, response_format: str = "verbose_json"
     ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, str, bytes]], str]:
         """构造 multipart 字段/文件与 mime（独立成方法，便于单测断言）。"""
         mime, _ = mimetypes.guess_type(target.name)
@@ -185,7 +190,7 @@ class OpenAIEndpoint(BaseEndpoint):
 
         fields: List[Tuple[str, str]] = [
             ("model", self.endpoint.model),
-            ("response_format", "json"),
+            ("response_format", response_format),
         ]
         if self.endpoint.language:
             fields.append(("language", self.endpoint.language))
@@ -218,12 +223,24 @@ class OpenAIEndpoint(BaseEndpoint):
         raise ProviderRequestError(f"转录端点返回类型异常: {type(parsed).__name__}")
 
     def _request_transcript(self, target: Path) -> str:
-        """发一次 `/audio/transcriptions` 并取回文本。
+        """发一次 `/audio/transcriptions` 并取回文本；格式按 `_ASR_FORMATS` 依次尝试。
 
         上游鉴权/配额失败时，把「去查 /audio/transcriptions 配置」这条会**把人带偏**的
         提示换掉——实测网关 `GET /models` 返回 200，而转录全 503 token 获取失败。
         """
-        fields, files, _ = self.build_transcription_form(target)
+        for response_format in self._ASR_FORMATS[:-1]:
+            try:
+                return self._post_transcription(target, response_format)
+            except ProviderRequestError as exc:
+                # 4xx = 本次请求（多半是 response_format）不被端点接受 → 换下一种格式再试；
+                # 5xx / 无状态码是端点侧故障，换格式没有意义，直接抛出。
+                if not exc.status or exc.status >= 500:
+                    raise
+        return self._post_transcription(target, self._ASR_FORMATS[-1])
+
+    def _post_transcription(self, target: Path, response_format: str) -> str:
+        """按指定 `response_format` 发一次转录请求并把响应体解析成文本。"""
+        fields, files, _ = self.build_transcription_form(target, response_format)
         body, content_type = build_multipart(fields, files)
 
         headers = self._headers(json_body=False)
