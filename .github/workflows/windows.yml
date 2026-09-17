@@ -38,6 +38,7 @@ jobs:
       - name: Install source packages
         shell: pwsh
         run: |
+          python -m pip install pytest
           if ("${{ matrix.mcp-sdk }}" -eq "latest") {
             python -m pip install -e .\mcp -e .\mcp-ext
           } else {
