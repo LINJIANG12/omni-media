@@ -332,6 +332,29 @@ def test_openai_transcription_falls_back_to_plain_json(audio_m4a: Path, monkeypa
     assert b'name="response_format"\r\n\r\njson\r\n' in bodies[1]
 
 
+def test_openai_transcription_does_not_fallback_on_5xx_or_auth(audio_m4a: Path, monkeypatch):
+    """5xx 与鉴权类 4xx 不是格式问题：只发一次请求、原样抛错，不做无谓的重传。"""
+    from omni_media_ext.providers import openai as openai_mod
+
+    endpoint = openai_endpoint("https://example.invalid/v1", model="whisper-1", mode="transcriptions")
+
+    for status, why in ((503, "上游 token 获取超时"), (401, "鉴权失败"), (413, "文件过大")):
+        bodies = []
+
+        def fake_http_request(url, method="GET", headers=None, body=b"", _status=status, **kwargs):
+            bodies.append(body)
+            raise ProviderRequestError(f"{_status} {_status}", status=_status, body="no")
+
+        monkeypatch.setattr(openai_mod, "http_request", fake_http_request)
+        try:
+            endpoint.process(audio_m4a, "请转录", "transcribe")
+        except ProviderRequestError:
+            pass
+        else:
+            raise AssertionError(f"{status} 应直接抛错而非静默失败")
+        assert len(bodies) == 1, f"HTTP {status} 不应触发格式回退重传"
+
+
 def test_openai_transcript_renders_segments_and_plain_text():
     """段级返回渲染成行首时间戳；只回纯文本时也要能出稿（时间戳降级为无）。"""
     plain = json.dumps({"text": "纯文本逐字稿"}).encode("utf-8")

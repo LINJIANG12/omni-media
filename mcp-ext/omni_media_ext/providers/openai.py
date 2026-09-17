@@ -222,6 +222,10 @@ class OpenAIEndpoint(BaseEndpoint):
             )
         raise ProviderRequestError(f"转录端点返回类型异常: {type(parsed).__name__}")
 
+    # 鉴权（401/403）与请求体过大（413）跟 response_format 无关：回退换格式只会把同一个
+    # 文件原样再传一遍，最后报错还指向第二次尝试，把真正的病因藏起来。
+    NO_FALLBACK_STATUS = frozenset({401, 403, 413})
+
     def _request_transcript(self, target: Path) -> str:
         """发一次 `/audio/transcriptions` 并取回文本；格式按 `_ASR_FORMATS` 依次尝试。
 
@@ -233,8 +237,8 @@ class OpenAIEndpoint(BaseEndpoint):
                 return self._post_transcription(target, response_format)
             except ProviderRequestError as exc:
                 # 4xx = 本次请求（多半是 response_format）不被端点接受 → 换下一种格式再试；
-                # 5xx / 无状态码是端点侧故障，换格式没有意义，直接抛出。
-                if not exc.status or exc.status >= 500:
+                # 5xx / 无状态码 / 鉴权与体积类 4xx 是端点侧或配置侧故障，换格式没有意义，直接抛出。
+                if not exc.status or exc.status >= 500 or exc.status in self.NO_FALLBACK_STATUS:
                     raise
         return self._post_transcription(target, self._ASR_FORMATS[-1])
 
