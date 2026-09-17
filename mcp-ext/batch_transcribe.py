@@ -16,6 +16,14 @@ from mcp.client.stdio import stdio_client
 
 REPO_ROOT = Path(__file__).resolve().parent
 _STATUS_RE = re.compile(r"<!-- OMNI_STATUS: (\{.*?\}) -->")
+_TOOL_METADATA_RE = re.compile(r"(?m)^>\s*(?:⏱️|💡|⚠️).*$")
+
+
+def strip_tool_metadata(text: str) -> str:
+    """移除 MCP 分卷续读提示等控制行，不让它们进入逐字稿事实源。"""
+    cleaned = _STATUS_RE.sub("", text)
+    cleaned = _TOOL_METADATA_RE.sub("", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 async def transcribe_file(session: ClientSession, audio_path: Path, max_minutes: float = 30.0) -> str:
@@ -38,7 +46,7 @@ async def transcribe_file(session: ClientSession, audio_path: Path, max_minutes:
                 )
 
                 status_match = _STATUS_RE.search(text)
-                body = _STATUS_RE.sub("", text).strip()
+                body = strip_tool_metadata(text)
                 if body:
                     full_text_parts.append(body)
 
