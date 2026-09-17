@@ -23,6 +23,9 @@ def quiet_kwargs(**kwargs: Any) -> dict:
     if os.name == "nt" and CREATE_NO_WINDOW:
         kwargs.setdefault("creationflags", CREATE_NO_WINDOW)
     kwargs.setdefault("stdin", subprocess.DEVNULL)
+    if kwargs.get("text") or kwargs.get("universal_newlines"):
+        kwargs.setdefault("encoding", "utf-8")
+        kwargs.setdefault("errors", "replace")
     return kwargs
 
 
