@@ -32,11 +32,9 @@ class StreamInfo:
 
 @dataclass
 class TokenEstimates:
-    gemini_audio_tokens: int
-    gemini_video_tokens: int
-    openai_audio_tokens: int
-    qwen_vision_tokens: int
-    deepseek_vision_tokens: int
+    """宿主原生多模态上下文消耗预估（本地直读，零外部凭证）。"""
+    audio_tokens: int
+    video_tokens: int
 
 
 @dataclass
@@ -74,6 +72,7 @@ class MediaMetadata:
 
         streams_str = "\n".join(streams_desc) if streams_desc else "- (无音视频轨道)"
 
+        oneshot_rec = "✅ 推荐整片直读 (≤75分钟)" if self.duration_seconds <= 4500 else "⚠️ 超过 75 分钟建议分卷切片"
         return f"""### 📊 媒体文件探测报告: `{self.file_name}`
 
 - **文件大小**: {self.file_size_mb:.2f} MB ({self.file_size_bytes:,} 字节)
@@ -82,14 +81,13 @@ class MediaMetadata:
 - **轨道信息**:
 {streams_str}
 
-#### 🎯 多模态 Token 预算预估:
-- **Google Gemini 原生音频**: ~`{self.estimates.get('gemini_audio_tokens', 0):,}` Tokens (约 $0.00002)
-- **Google Gemini 原生视音频**: ~`{self.estimates.get('gemini_video_tokens', 0):,}` Tokens
-- **OpenAI input_audio**: ~`{self.estimates.get('openai_audio_tokens', 0):,}` Tokens
-- **Qwen / DeepSeek (1FPS 抽帧)**: ~`{self.estimates.get('deepseek_vision_tokens', 0):,}` 视觉 Tokens
+#### 🎯 宿主原生上下文与切片预算:
+- **音频流原生直读预估**: ~`{self.estimates.get('audio_tokens', 0):,}` Tokens (按标准 16kHz 人声流估算)
+- **视音频多模态直读预估**: ~`{self.estimates.get('video_tokens', 0):,}` Tokens
+- **原生 One-Shot 整片直读**: {oneshot_rec}
 
 > 💡 **系统推荐策略**: `{self.recommended_mode}`
-> 推荐模型通道: **{self.recommended_provider}**
+> 推荐听音通道: **{self.recommended_provider}**
 """
 
 
@@ -210,34 +208,27 @@ class MediaInspector:
         secs = int(duration % 60)
         dur_human = f"{hrs:02d}:{mins:02d}:{secs:02d}" if hrs > 0 else f"{mins:02d}:{secs:02d}"
 
-        # Token Estimations
-        # Gemini Audio: ~32 tokens per second (16kHz)
-        gemini_audio = int(duration * 32)
-        # Gemini Video: ~260 visual tokens per second (1 fps) + 32 audio tokens per second
-        gemini_video = int(duration * 292) if has_video else gemini_audio
-        # OpenAI audio: ~100 tokens per second average
-        openai_audio = int(duration * 100)
-        # Qwen/DeepSeek vision frames: 1 frame per second, approx 768 tokens per image
-        deepseek_vision = int(duration * 768) if has_video else 0
+        # Token Estimations for Host-Native Multimodal Inspection
+        # Native Audio: ~32 tokens per second (16kHz voice stream)
+        audio_tokens = int(duration * 32)
+        # Native Video: ~260 visual tokens per second (1 fps) + 32 audio tokens per second
+        video_tokens = int(duration * 292) if has_video else audio_tokens
 
         estimates = {
-            "gemini_audio_tokens": gemini_audio,
-            "gemini_video_tokens": gemini_video,
-            "openai_audio_tokens": openai_audio,
-            "qwen_vision_tokens": deepseek_vision,
-            "deepseek_vision_tokens": deepseek_vision,
+            "audio_tokens": audio_tokens,
+            "video_tokens": video_tokens,
         }
 
-        # Recommendations
+        # Recommendations for host native reading
         if has_video and not has_audio:
-            rec_mode = "仅画面无声：推荐使用视频抽帧/Vision VLM 分析画面"
-            rec_prov = "Gemini / Qwen-VL / DeepSeek-V4-Vision"
+            rec_mode = "仅画面无声：无音频轨道，需使用视觉模型直接分析画面"
+            rec_prov = "宿主视觉多模态内核"
         elif has_video:
-            rec_mode = "标准讲座/网课视频：默认极速抽取 16kHz 人声直读；若提问板书/PPT 切换画面分析"
-            rec_prov = "Gemini 2.5/3.0 Flash (全模态超大上下文最佳)"
+            rec_mode = "标准网课/讲座视音频：默认抽取 16kHz 单声道人声切片供宿主直读"
+            rec_prov = "宿主音频多模态内核 (read_audio file 模式)"
         else:
             rec_mode = "纯音频文件：原生单声道直读，零重编码"
-            rec_prov = "Gemini / Xiaomi MiMo / OpenAI input_audio"
+            rec_prov = "宿主音频多模态内核 (read_audio)"
 
         return MediaMetadata(
             file_path=str(path),

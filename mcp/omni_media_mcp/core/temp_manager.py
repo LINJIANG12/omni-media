@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, List
 
 
 class ManagedTempDir:
@@ -26,22 +24,3 @@ class ManagedTempDir:
                 shutil.rmtree(self.path, ignore_errors=True)
             except Exception:
                 pass
-
-
-@contextmanager
-def temp_cleanup(*file_paths: Path | str) -> Generator[None, None, None]:
-    """Context manager ensuring specified files are removed when block finishes."""
-    try:
-        yield
-    finally:
-        for p in file_paths:
-            if p:
-                path = Path(p)
-                if path.exists():
-                    try:
-                        if path.is_file():
-                            path.unlink(missing_ok=True)
-                        elif path.is_dir():
-                            shutil.rmtree(path, ignore_errors=True)
-                    except Exception:
-                        pass

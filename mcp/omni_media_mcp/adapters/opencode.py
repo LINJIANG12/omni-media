@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from .base import BaseHostAdapter, build_stdio_entry
 

@@ -3,7 +3,7 @@
 > **把音视频交给外部模型，而不是交给宿主**：本服务自己按配置文件选定的端点发请求，
 > 完成转录、教材级总结与抗幻觉问答，把**文本**返回给调用方。
 
-[![MCP 标准](https://img.shields.io/badge/MCP-mcp%3E%3D1.0.0-blue.svg?style=flat-square)](#)
+[![MCP 标准](https://img.shields.io/badge/MCP-mcp%3E%3D2.1.0%2C%3C3-blue.svg?style=flat-square)](#)
 [![协议](https://img.shields.io/badge/协议-Gemini%20%7C%20OpenAI-111827?style=flat-square)](#)
 [![配置](https://img.shields.io/badge/配置-config.json-2ea44f?style=flat-square)](#)
 
@@ -45,7 +45,7 @@
 # 纯文本宿主：只挂本版本
 cd mcp-ext && omni-media-ext apply --target zcode
 # 有原生音频的宿主：挂原生版
-cd mcp && python src/cli.py apply --target zcode      # 或 omni-media apply --target zcode
+cd mcp && python -m omni_media_mcp.cli apply --target zcode      # 或 omni-media apply --target zcode
 ```
 
 ### 同挂时的优先级
@@ -216,7 +216,7 @@ omni-media-ext status --probe     # 诊断环境 + 端点可达性
 返回是固定契约的 Markdown：
 
 ```text
-<!-- OMNI_STATUS: {"contract_version":1,"status":"COMPLETED|IN_PROGRESS","mode":"oneshot|chunked","is_finished":true,"start_time":"00:00:00","end_time":"00:10:00","total_duration":"00:32:25","channel":"external-model","task":"transcribe","endpoint":"gemini-proxy","protocol":"openai","model":"gemini-3.8-flash-high","elapsed_sec":42.1,"clamped":false} -->
+<!-- OMNI_STATUS: {"contract_version":1,"status":"COMPLETED|IN_PROGRESS","mode":"oneshot|chunked","is_finished":true,"start_time":"00:00:00","end_time":"00:10:00","total_duration":"00:32:25","channel":"external-model","task":"transcribe","timestamps":false,"endpoint":"gemini-proxy","protocol":"openai","model":"gemini-3.8-flash-high","elapsed_sec":42.1,"clamped":false} -->
 
 <模型返回正文>
 
@@ -224,7 +224,7 @@ omni-media-ext status --probe     # 诊断环境 + 端点可达性
 ```
 
 **状态注释的前半段与原生听音版逐字同构**（标签同名、键名同义），详见下一节。
-本版本独有的信息只放在不冲突的扩展键里：`channel` / `task` / `endpoint` / `protocol` /
+本版本独有的信息只放在不冲突的扩展键里：`channel` / `task` / `timestamps`（被动可选检测，默认纯文本 false） / `endpoint` / `protocol` /
 `model` / `elapsed_sec` / `clamped` / `finish_reason`。
 
 > **注意 `mode` 与 `task` 的分工**：`mode` 是**切片模式**（`oneshot` = 整篇一次读完，

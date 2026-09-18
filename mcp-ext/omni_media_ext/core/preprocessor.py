@@ -12,10 +12,27 @@ from pathlib import Path
 from typing import List, Optional
 
 from .limits import AUDIO_BITRATE_VOICE, MAX_CONCURRENT_FFMPEG, SUBPROCESS_TIMEOUT_SEC
-from .temp_manager import ManagedTempDir
 from .proc import run_quiet
 
+_CURRENT_MAX_CONCURRENCY: int = MAX_CONCURRENT_FFMPEG
+_CONCURRENCY_MUTEX = threading.Lock()
 _FFMPEG_LOCK = threading.BoundedSemaphore(MAX_CONCURRENT_FFMPEG)
+
+
+def set_max_concurrency(val: int) -> None:
+    """根据配置动态调整 FFmpeg 线程并发上限。"""
+    global _FFMPEG_LOCK, _CURRENT_MAX_CONCURRENCY
+    if val <= 0:
+        return
+    with _CONCURRENCY_MUTEX:
+        if val != _CURRENT_MAX_CONCURRENCY:
+            _FFMPEG_LOCK = threading.BoundedSemaphore(val)
+            _CURRENT_MAX_CONCURRENCY = val
+
+
+def get_ffmpeg_lock() -> threading.BoundedSemaphore:
+    """获取当前生效的 FFmpeg 信号量锁。"""
+    return _FFMPEG_LOCK
 
 
 def _atomic_replace_file(src: Path, dst: Path, retries: int = 4, delay: float = 0.25) -> None:
@@ -38,6 +55,11 @@ class MediaPreprocessor:
     running on an asyncio event loop MUST dispatch these blocking methods via
     ``asyncio.to_thread`` (or an executor) instead of invoking them inline.
     """
+
+    @classmethod
+    def set_max_concurrency(cls, val: int) -> None:
+        """动态更新底层 FFmpeg 最大并发数。"""
+        set_max_concurrency(val)
 
     @staticmethod
     def _find_ffmpeg() -> str:
@@ -140,7 +162,7 @@ class MediaPreprocessor:
         ])
 
         try:
-            with _FFMPEG_LOCK:
+            with get_ffmpeg_lock():
                 res = run_quiet(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -217,7 +239,7 @@ class MediaPreprocessor:
         ])
 
         try:
-            with _FFMPEG_LOCK:
+            with get_ffmpeg_lock():
                 res = run_quiet(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -281,7 +303,7 @@ class MediaPreprocessor:
         ])
 
         try:
-            with _FFMPEG_LOCK:
+            with get_ffmpeg_lock():
                 res = run_quiet(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -325,7 +347,7 @@ class MediaPreprocessor:
         ]
 
         try:
-            with _FFMPEG_LOCK:
+            with get_ffmpeg_lock():
                 res = run_quiet(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -380,7 +402,7 @@ class MediaPreprocessor:
         ]
 
         try:
-            with _FFMPEG_LOCK:
+            with get_ffmpeg_lock():
                 res = run_quiet(
                     cmd,
                     stdout=subprocess.PIPE,

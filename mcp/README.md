@@ -133,7 +133,7 @@ Agent 仅需在下一轮调用中传入 `start_time="00:15:00"` 即可无缝衔�
 - `start_time`：切片起始时间戳（`"00:15:00"` 或秒数）；
 - `duration_minutes`：本次时长预算；**未指定且媒体 ≤ 75 分钟时一次整片就绪（One-Shot）**，超过 75 分钟自动按 30 分钟安全分卷；
   技能侧的任务书切片本就按 60 分钟预算切好，因此**通常不需要传该参数**，仅在返回 `is_finished=false` 时按续读参数传；
-- `output_mode`：`file`（推荐，返回本地切片路径）/ `inline`（返回原生 Audio 块）/ `auto`。
+- `output_mode`：`file`（推荐，返回本地切片路径与 `<!-- OMNI_STATUS: {...} -->` 状态注释）/ `inline`（返回原生 Audio 块）/ `auto`（默认，≤10分钟且≤8MB时走 inline，超限走 file；需结构化续读循环推荐显式指定 `file` 模式）。
 
 ### `inspect_media`
 毫秒级探测媒体时长、轨道编码、体积与规格。不含任何凭证或联网行为。

@@ -38,7 +38,6 @@ from .core.inspector import MediaInspector
 from .core.limits import PROTOCOL_WHITELIST
 from .core.proc import run_quiet
 from .providers.base import ProviderRequestError, http_request
-from .providers.registry import build_endpoint_from_config
 from .server import configure, mcp
 
 

@@ -20,10 +20,7 @@ from typing import Annotated, Optional, Union
 
 from pydantic import Field
 
-try:
-    from mcp.server.mcpserver import Audio, Context, MCPServer
-except ImportError:
-    from mcp.server.fastmcp import Audio, Context, FastMCP as MCPServer
+from mcp.server.mcpserver import Audio, Context, MCPServer
 
 from mcp.types import ToolAnnotations
 

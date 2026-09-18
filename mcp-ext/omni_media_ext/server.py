@@ -26,12 +26,8 @@ from typing import Annotated, Any, Callable, Dict, Optional
 
 from pydantic import Field
 
-try:
-    from mcp.server.mcpserver import Context, MCPServer
-    from mcp.server.mcpserver.exceptions import ToolError
-except ImportError:  # mcp 1.x（FastMCP 时代）的兼容路径
-    from mcp.server.fastmcp import Context, FastMCP as MCPServer
-    from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp.types import ToolAnnotations
 
@@ -50,8 +46,18 @@ from .prompts import mode_prompt
 from .providers.base import BaseEndpoint, ProviderRequestError
 from .providers.registry import build_endpoint_from_config
 
-# Concurrency semaphore to throttle ffmpeg processes across async tasks
-_ASYNC_FFMPEG_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_FFMPEG)
+# Concurrency semaphore to throttle ffmpeg processes across async tasks (dynamically synced)
+_ASYNC_FFMPEG_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_CURRENT_SEMAPHORE_LIMIT: int = 0
+
+
+def _get_async_ffmpeg_semaphore(target_limit: int) -> asyncio.Semaphore:
+    """延迟创建并动态同步与 config.defaults.max_concurrency 一致的异步信号量。"""
+    global _ASYNC_FFMPEG_SEMAPHORE, _CURRENT_SEMAPHORE_LIMIT
+    if _ASYNC_FFMPEG_SEMAPHORE is None or _CURRENT_SEMAPHORE_LIMIT != target_limit:
+        _ASYNC_FFMPEG_SEMAPHORE = asyncio.Semaphore(target_limit)
+        _CURRENT_SEMAPHORE_LIMIT = target_limit
+    return _ASYNC_FFMPEG_SEMAPHORE
 
 # 切片体积预估用的人声码率（32kbps ≈ 4000 字节/秒）。
 _BYTES_PER_AUDIO_SEC = int(AUDIO_BITRATE_VOICE.rstrip("k")) * 1000 / 8
@@ -291,6 +297,10 @@ async def read_media(
 
     # ---- 配置与端点（凭证未就绪在这里就会给出可操作的报错，而不是等 401）----
     config = _load_config()
+    concurrency_limit = config.defaults.max_concurrency
+    MediaPreprocessor.set_max_concurrency(concurrency_limit)
+    ffmpeg_semaphore = _get_async_ffmpeg_semaphore(concurrency_limit)
+
     endpoint_impl: BaseEndpoint = build_endpoint_from_config(config, endpoint)
     endpoint_impl.endpoint.require_ready()
     await progress(0.05, f"已选中端点 `{endpoint_impl.name}`（{endpoint_impl.protocol} / {endpoint_impl.model}）")
@@ -335,7 +345,7 @@ async def read_media(
 
         if needs_ffmpeg:
             media_for_request = tmp_dir / f"{path.stem}_16k.m4a"
-            async with _ASYNC_FFMPEG_SEMAPHORE:
+            async with ffmpeg_semaphore:
                 await asyncio.to_thread(
                     MediaPreprocessor.extract_optimized_audio,
                     input_file=path,
@@ -392,8 +402,8 @@ async def read_media(
         # 本版本扩展字段（原生版没有；命名不与共有字段冲突）
         "channel": "external-model",
         "task": mode_key,
-        # 本次文本是否带行首时间戳（由 verbose_json 的 engine segments 渲染而来）。
-        # false 说明端点不支持该格式、只回了纯文本 —— 下游据此决定能不能做分集切分。
+        # 本次文本是否带行首时间戳（纯可选检测字段；如由 Whisper segments 渲染而来或为纯文本）。
+        # false 属于常态，转录默认无需时间戳且严禁臆造时间戳；下游按切片推进，不依赖行首时间戳。
         "timestamps": bool(_LEADING_TIMESTAMP_RE.search(result.text or "")),
         "endpoint": result.endpoint_name,
         "protocol": result.protocol,
