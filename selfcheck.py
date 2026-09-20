@@ -72,6 +72,9 @@ def check_tools_and_modes():
 
     assert getattr(t_media.annotations, "read_only_hint", None) is True
     assert getattr(t_media.annotations, "open_world_hint", None) is True
+    # Verify output_file parameter is present in read_media tool
+    tool_props = getattr(t_media, "parameters", {}).get("properties", {})
+    assert "output_file" in tool_props, f"output_file missing from read_media parameters: {tool_props.keys()}"
 
 
 def check_adapters():

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Annotated, Any, Dict, Optional, Union
 
@@ -221,6 +222,10 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
             endpoint: Annotated[Optional[str], Field(description="使用的模型端点名称（可选，缺省取 active 端点）")] = None,
             start_time: Annotated[Optional[str], Field(description="切片起始时间戳，如 '00:00:00' 或秒数（可选）")] = None,
             duration_minutes: Annotated[Optional[float], Field(description="切片时长（分钟，可选）")] = None,
+            output_file: Annotated[
+                Optional[str],
+                Field(description="转录产物直写落盘路径（必须为绝对路径）。若指定，MCP 将直接写入目标文件，会话中仅返回轻量收据，杜绝上下文爆炸与二次总结"),
+            ] = None,
             ctx: Context = None,
         ) -> str:
             """使用配置好的外部大模型（Gemini / OpenAI 协议）对音视频进行转录、总结或抗幻觉问答。"""
@@ -235,6 +240,13 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
                 raise ValueError(f"不支持的媒体格式: '{path.suffix}'")
             if mode not in MODE_WHITELIST:
                 raise ValueError(f"无效的 mode: '{mode}'。可选: {sorted(MODE_WHITELIST)}")
+
+            output_path: Optional[Path] = None
+            if output_file is not None and str(output_file).strip():
+                output_path = Path(str(output_file).strip())
+                if not output_path.is_absolute():
+                    raise ValueError(f"output_file 必须为绝对路径，收到: '{output_file}'")
+                output_path.parent.mkdir(parents=True, exist_ok=True)
 
             meta = await asyncio.to_thread(MediaInspector.probe, path)
             total_sec = meta.duration_seconds
@@ -286,6 +298,21 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
                     mode=mode,
                 )
 
+            chars_written = len(res.text)
+            if output_path is not None:
+                # 首卷（start_sec <= 0.5）采用唯一 UUID 临时文件 + os.replace 原子覆写
+                if start_sec <= 0.5 or not output_path.exists():
+                    tmp_target = output_path.parent / f".{output_path.name}.tmp.{uuid.uuid4().hex[:8]}"
+                    tmp_target.write_text(res.text, encoding="utf-8")
+                    os.replace(tmp_target, output_path)
+                else:
+                    # 续卷（start_sec > 0.5）追加写入；防御性确保上一卷末尾包含换行符，防止跨卷文本粘连
+                    existing_text = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
+                    sep = "\n\n" if (existing_text and not existing_text.endswith("\n")) else ""
+                    with open(output_path, "a", encoding="utf-8") as af:
+                        af.write(f"{sep}{res.text}")
+                    chars_written = len(existing_text) + len(sep) + len(res.text)
+
             status_payload = {
                 "contract_version": STATUS_CONTRACT_VERSION,
                 "file_name": path.name,
@@ -300,12 +327,26 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
                 "model": ep.model,
                 "protocol": ep.protocol,
                 "elapsed_sec": round(res.elapsed_sec, 2),
+                "output_file": output_path.as_posix() if output_path else None,
+                "chars_written": chars_written,
             }
 
             status_comment = f"<!-- OMNI_STATUS: {json.dumps(status_payload, ensure_ascii=False)} -->\n\n"
             next_hint = ""
             if not is_finished and next_start_str:
                 next_hint = f"\n\n> ⚠️ **分卷续读提示**: 下一卷续读参数: `start_time='{next_start_str}'`, `duration_minutes={next_budget_min}`。"
+
+            if output_path is not None:
+                receipt = (
+                    f"{status_comment}"
+                    f"✅ **[Direct-to-Disk] 转录逐字稿已由 MCP 直写磁盘**\n"
+                    f"- 落盘路径: `{output_path.as_posix()}`\n"
+                    f"- 本次写入: {len(res.text):,} 字符 (累计文件: {chars_written:,} 字符, 耗时 {res.elapsed_sec:.1f}s)\n"
+                    f"- 分卷状态: {'100% 完成 (is_finished=true)' if is_finished else f'进行中（待续读，下一卷起始 {next_start_str}）'}\n\n"
+                    f"⚠️ **【纪律约束】** 全文已安全落盘，未载入上下文。无需且严禁 Agent 在对话中重复输出全文或做二次总结！"
+                    f"{next_hint}"
+                )
+                return receipt
 
             return f"{status_comment}{res.text}{next_hint}"
 
