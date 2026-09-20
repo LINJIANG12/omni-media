@@ -1,7 +1,8 @@
-"""Base Host Adapter for FastCtx-style MCP configuration management."""
+"""Base Host Adapter for MCP configuration management."""
 
 from __future__ import annotations
 
+import copy
 import difflib
 import json
 import re
@@ -12,7 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 
 
 def strip_json_comments(text: str) -> str:
-    """Strips single-line and multi-line comments from JSONC text while preserving string literals."""
+    """Strips comments from JSONC text while preserving string literals."""
     pattern = r'("(?:\\.|[^"\\])*")|(/\*[\s\S]*?\*/|//[^\r\n]*)'
 
     def replace(match):
@@ -24,80 +25,60 @@ def strip_json_comments(text: str) -> str:
 
 
 def get_default_env_vars() -> Dict[str, str]:
-    """Returns the environment the spawned MCP server needs from its host.
-
-    Only PYTHONPATH is injected: audio is listened to natively by the host model,
-    so the server requires no provider API credentials at all.
-    """
-    env_vars: Dict[str, str] = {}
-    # Inject PYTHONPATH to current module's root
+    """Returns the environment needed by spawned MCP server."""
     proj_root = str(Path(__file__).resolve().parent.parent.parent)
-    env_vars["PYTHONPATH"] = proj_root
-    return env_vars
+    return {"PYTHONPATH": proj_root}
 
 
 def build_stdio_entry(
-    server_module: str,
+    server_module: str = "omni_media.server",
+    args: Optional[list[str]] = None,
     extra_env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Build the canonical stdio entry used by adapters and `print-config`."""
+    """Build canonical stdio entry used by adapters and print-config."""
     env = get_default_env_vars()
     if extra_env:
         env.update(extra_env)
+    cmd_args = ["-m", server_module]
+    if args:
+        cmd_args.extend(args)
     return {
         "command": sys.executable,
-        "args": ["-m", server_module],
+        "args": cmd_args,
         "env": env,
     }
 
 
-def build_generic_config() -> Dict[str, Any]:
-    """Return a host-neutral MCP configuration for any stdio-capable client."""
+def build_generic_config(server_name: str = "omni-media", server_module: str = "omni_media.server") -> Dict[str, Any]:
     return {
         "mcpServers": {
-            "omni-media": build_stdio_entry("omni_media_mcp.server"),
+            server_name: build_stdio_entry(server_module),
         }
     }
 
 
-# JSON lines that assign an API_KEY env var, e.g.  "OPENAI_API_KEY": "sk-..."
-# Optional leading diff prefix ([+- ]) is allowed because these diffs are
-# rendered through unified_diff which prefixes every content line.
-_SECRET_ENV_LINE_RE = re.compile(
-    r'(^[+\- ]*\s*"[A-Z0-9_]*API_KEY"\s*:\s*)"([^"\\]*(?:\\.[^"\\]*)*)"',
-    re.MULTILINE,
-)
-
-
-def _mask_secrets_in_diff(diff: str) -> str:
-    """Redacts any API-key value inside a unified-diff text.
-
-    The host config being previewed may already hold credentials for other MCP
-    servers (this tool injects none).  Printing that raw would echo someone
-    else's secrets to the terminal/agent, so mask every ``*_API_KEY`` value while
-    preserving the surrounding diff structure.
-    """
-    if not diff:
-        return diff
-    return _SECRET_ENV_LINE_RE.sub(r'\1"***REDACTED***"', diff)
-
-
 class BaseHostAdapter(ABC):
-    """Abstract Base Class for host MCP integrations."""
+    """Unified Host Adapter parameterized by service_id."""
 
     target_id: str = "base"
     display_name: str = "Base Host"
 
-    def __init__(self, custom_config_path: Optional[str | Path] = None):
+    def __init__(
+        self,
+        custom_config_path: Optional[str | Path] = None,
+        server_name: str = "omni-media",
+        server_module: str = "omni_media.server",
+    ):
         self.custom_path = Path(custom_config_path).resolve() if custom_config_path else None
+        self.server_name = server_name
+        self.server_module = server_module
 
     @abstractmethod
     def get_config_path(self) -> Path:
-        """Returns the target configuration file path."""
+        """Target configuration file path."""
         pass
 
     def read_config(self) -> Dict[str, Any]:
-        """Reads and parses current configuration safely."""
         path = self.get_config_path()
         if not path.exists():
             return {}
@@ -111,41 +92,35 @@ class BaseHostAdapter(ABC):
             return {}
 
     def write_config(self, data: Dict[str, Any]) -> None:
-        """Atomically writes configuration data to target path."""
         path = self.get_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
         path.write_text(content, encoding="utf-8")
 
-    @abstractmethod
     def build_entry(self) -> Dict[str, Any]:
-        """Builds the server configuration entry for this host."""
-        pass
+        return build_stdio_entry(self.server_module)
 
-    @abstractmethod
     def is_registered(self) -> bool:
-        """Checks if omni-media is currently registered in this host configuration."""
-        pass
+        data = self.read_config()
+        servers = data.get("mcpServers", {})
+        return isinstance(servers, dict) and self.server_name in servers
 
-    @abstractmethod
     def build_applied_config(self, current_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Generates new configuration dictionary with omni-media injected."""
-        pass
+        data = copy.deepcopy(current_data)
+        if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
+            data["mcpServers"] = {}
+        data["mcpServers"][self.server_name] = self.build_entry()
+        return data
 
-    @abstractmethod
     def build_unapplied_config(self, current_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Generates new configuration dictionary with omni-media removed."""
-        pass
+        data = copy.deepcopy(current_data)
+        if "mcpServers" in data and isinstance(data["mcpServers"], dict) and self.server_name in data["mcpServers"]:
+            del data["mcpServers"][self.server_name]
+        return data
 
     def preview_apply(self) -> Tuple[bool, str, Dict[str, Any]]:
-        """Previews the diff of applying the configuration.
-
-        Returns:
-            (has_changes, diff_text, new_config)
-        """
         current = self.read_config()
         new_data = self.build_applied_config(current)
-
         old_str = json.dumps(current, indent=2, ensure_ascii=False) + "\n" if current else "{\n}\n"
         new_str = json.dumps(new_data, indent=2, ensure_ascii=False) + "\n"
 
@@ -160,22 +135,15 @@ class BaseHostAdapter(ABC):
                 tofile=f"b/{self.get_config_path().name}",
             )
         )
-        return True, _mask_secrets_in_diff(diff), new_data
+        return True, diff, new_data
 
     def preview_unapply(self) -> Tuple[bool, str, Dict[str, Any]]:
-        """Previews the diff of removing omni-media configuration.
-
-        Returns:
-            (has_changes, diff_text, new_config)
-        """
         current = self.read_config()
         if not self.is_registered():
             return False, "", current
-
         new_data = self.build_unapplied_config(current)
         old_str = json.dumps(current, indent=2, ensure_ascii=False) + "\n"
         new_str = json.dumps(new_data, indent=2, ensure_ascii=False) + "\n"
-
         diff = "".join(
             difflib.unified_diff(
                 old_str.splitlines(keepends=True),
@@ -184,10 +152,9 @@ class BaseHostAdapter(ABC):
                 tofile=f"b/{self.get_config_path().name}",
             )
         )
-        return True, _mask_secrets_in_diff(diff), new_data
+        return True, diff, new_data
 
     def apply(self) -> Tuple[bool, str]:
-        """Applies registration to host configuration."""
         has_change, diff, new_data = self.preview_apply()
         if not has_change:
             return True, "配置已是最新，无需修改。"
@@ -195,29 +162,25 @@ class BaseHostAdapter(ABC):
         return True, f"成功配置到 {self.display_name} ({self.get_config_path()})"
 
     def unapply(self) -> Tuple[bool, str]:
-        """Removes omni-media entry from host configuration."""
         if not self.is_registered():
-            return True, f"{self.display_name} 中未检测到 omni-media 配置，跳过。"
+            return True, f"{self.display_name} 中未检测到 {self.server_name} 配置，跳过。"
         has_change, diff, new_data = self.preview_unapply()
         self.write_config(new_data)
         return True, f"成功从 {self.display_name} 移除配置。"
 
     def check_status(self) -> Dict[str, Any]:
-        """Checks configuration status and returns standard diagnostic report."""
         path = self.get_config_path()
         file_exists = path.exists()
         registered = self.is_registered()
-
         if registered:
             status = "PASS"
             msg = f"已正确挂载 ({path})"
         elif file_exists:
             status = "INFO"
-            msg = f"配置文件存在，但未挂载 omni-media ({path})"
+            msg = f"配置文件存在，但未挂载 {self.server_name} ({path})"
         else:
             status = "INFO"
             msg = f"未检测到宿主配置文件 ({path})"
-
         return {
             "target": self.target_id,
             "display_name": self.display_name,

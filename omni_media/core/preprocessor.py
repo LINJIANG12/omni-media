@@ -12,10 +12,27 @@ from pathlib import Path
 from typing import List, Optional
 
 from .limits import AUDIO_BITRATE_VOICE, MAX_CONCURRENT_FFMPEG, SUBPROCESS_TIMEOUT_SEC
-from .temp_manager import ManagedTempDir
 from .proc import run_quiet
 
+_CURRENT_MAX_CONCURRENCY: int = MAX_CONCURRENT_FFMPEG
+_CONCURRENCY_MUTEX = threading.Lock()
 _FFMPEG_LOCK = threading.BoundedSemaphore(MAX_CONCURRENT_FFMPEG)
+
+
+def set_max_concurrency(val: int) -> None:
+    """Dynamically update FFmpeg concurrency semaphore limit."""
+    global _FFMPEG_LOCK, _CURRENT_MAX_CONCURRENCY
+    if val <= 0:
+        return
+    with _CONCURRENCY_MUTEX:
+        if val != _CURRENT_MAX_CONCURRENCY:
+            _FFMPEG_LOCK = threading.BoundedSemaphore(val)
+            _CURRENT_MAX_CONCURRENCY = val
+
+
+def get_ffmpeg_lock() -> threading.BoundedSemaphore:
+    """Retrieve current active FFmpeg semaphore."""
+    return _FFMPEG_LOCK
 
 
 def _atomic_replace_file(src: Path, dst: Path, retries: int = 4, delay: float = 0.25) -> None:
@@ -31,13 +48,11 @@ def _atomic_replace_file(src: Path, dst: Path, retries: int = 4, delay: float = 
 
 
 class MediaPreprocessor:
-    """Performs lightning-fast, lossless or lightweight stream extractions.
+    """Performs fast stream extractions and transcodings with FFmpeg."""
 
-    Every subprocess launch is bounded by ``SUBPROCESS_TIMEOUT_SEC`` so a
-    stalled or oversized encode cannot block the caller indefinitely. Callers
-    running on an asyncio event loop MUST dispatch these blocking methods via
-    ``asyncio.to_thread`` (or an executor) instead of invoking them inline.
-    """
+    @classmethod
+    def set_max_concurrency(cls, val: int) -> None:
+        set_max_concurrency(val)
 
     @staticmethod
     def _find_ffmpeg() -> str:
@@ -54,12 +69,6 @@ class MediaPreprocessor:
 
     @staticmethod
     def parse_time_str(t: str | int | float | None) -> Optional[float]:
-        """Converts 'HH:MM:SS', 'MM:SS', or seconds string/number into total float seconds.
-
-        Raises:
-            ValueError: if the value cannot be parsed or is negative (negative
-                timestamps would otherwise produce meaningless ffmpeg slices).
-        """
         if t is None:
             return None
         if isinstance(t, (int, float)):
@@ -85,7 +94,6 @@ class MediaPreprocessor:
 
     @staticmethod
     def format_time_str(seconds: float) -> str:
-        """Formats seconds into 'HH:MM:SS'."""
         sec = max(0.0, seconds)
         hrs = int(sec // 3600)
         mins = int((sec % 3600) // 60)
@@ -101,11 +109,7 @@ class MediaPreprocessor:
         duration_seconds: Optional[float] = None,
         bitrate: str = AUDIO_BITRATE_VOICE,
     ) -> Path:
-        """Extracts 16kHz mono audio (optimal for host multimodal speech perception).
-
-        Supports optional start_time and duration_seconds slicing.
-        Safeguarded by concurrency semaphore and atomic file staging.
-        """
+        """Extracts 16kHz mono AAC audio (ideal for multimodal speech LLM)."""
         src = Path(input_file).resolve()
         if not src.exists():
             raise FileNotFoundError(f"输入文件不存在: {input_file}")
@@ -131,31 +135,82 @@ class MediaPreprocessor:
             cmd.extend(["-t", str(duration_seconds)])
 
         cmd.extend([
-            "-vn",          # strip video
+            "-vn",
             "-acodec", "aac",
-            "-ar", "16000",  # 16kHz
-            "-ac", "1",      # mono channel
-            "-b:a", str(bitrate),   # voice bitrate
+            "-ar", "16000",
+            "-ac", "1",
+            "-b:a", str(bitrate),
             str(tmp_dst),
         ])
 
         try:
-            with _FFMPEG_LOCK:
-                res = run_quiet(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=SUBPROCESS_TIMEOUT_SEC,
-                )
+            with get_ffmpeg_lock():
+                res = run_quiet(cmd, text=True, timeout=SUBPROCESS_TIMEOUT_SEC)
             if res.returncode != 0 or not tmp_dst.exists() or tmp_dst.stat().st_size == 0:
                 raise RuntimeError(f"FFmpeg 音频抽取失败: {res.stderr}")
-
             _atomic_replace_file(tmp_dst, dst)
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"FFmpeg 音频抽取超时 (>{SUBPROCESS_TIMEOUT_SEC}s): 文件可能过大，建议先切片。"
-            ) from e
+            raise RuntimeError(f"FFmpeg 音频抽取超时 (>{SUBPROCESS_TIMEOUT_SEC}s)") from e
+        finally:
+            if tmp_dst.exists():
+                try:
+                    tmp_dst.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        return dst
+
+    @classmethod
+    def transcode_to_mp3(
+        cls,
+        input_file: str | Path,
+        output_file: Optional[str | Path] = None,
+        start_time: Optional[str | int | float] = None,
+        duration_seconds: Optional[float] = None,
+        bitrate: str = "64k",
+    ) -> Path:
+        """Transcodes media to 16kHz mono MP3 (required for OpenAI input_audio)."""
+        src = Path(input_file).resolve()
+        if not src.exists():
+            raise FileNotFoundError(f"输入文件不存在: {input_file}")
+
+        if output_file:
+            dst = Path(output_file).resolve()
+            dst.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            dst = src.parent / f"{src.stem}_16k_mono.mp3"
+
+        tmp_id = f"tmp_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+        tmp_dst = dst.parent / f"{dst.stem}.{tmp_id}{dst.suffix}"
+
+        ffmpeg = cls._find_ffmpeg()
+        cmd = [ffmpeg, "-y"]
+
+        if start_time is not None:
+            cmd.extend(["-ss", str(start_time)])
+
+        cmd.extend(["-i", str(src)])
+
+        if duration_seconds is not None:
+            cmd.extend(["-t", str(duration_seconds)])
+
+        cmd.extend([
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-ar", "16000",
+            "-ac", "1",
+            "-b:a", str(bitrate),
+            str(tmp_dst),
+        ])
+
+        try:
+            with get_ffmpeg_lock():
+                res = run_quiet(cmd, text=True, timeout=SUBPROCESS_TIMEOUT_SEC)
+            if res.returncode != 0 or not tmp_dst.exists() or tmp_dst.stat().st_size == 0:
+                raise RuntimeError(f"FFmpeg MP3 转码失败: {res.stderr}")
+            _atomic_replace_file(tmp_dst, dst)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"FFmpeg MP3 转码超时 (>{SUBPROCESS_TIMEOUT_SEC}s)") from e
         finally:
             if tmp_dst.exists():
                 try:
@@ -204,18 +259,10 @@ class MediaPreprocessor:
         ])
 
         try:
-            with _FFMPEG_LOCK:
-                res = run_quiet(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=SUBPROCESS_TIMEOUT_SEC,
-                )
+            with get_ffmpeg_lock():
+                res = run_quiet(cmd, text=True, timeout=SUBPROCESS_TIMEOUT_SEC)
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"FFmpeg 视频切片超时 (>{SUBPROCESS_TIMEOUT_SEC}s): 文件可能过大，建议先切片。"
-            ) from e
+            raise RuntimeError(f"FFmpeg 视频切片超时 (>{SUBPROCESS_TIMEOUT_SEC}s)") from e
         if res.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
             raise RuntimeError(f"FFmpeg 视频切片失败: {res.stderr}")
 
@@ -229,13 +276,12 @@ class MediaPreprocessor:
         fps: float = 1.0,
         max_frames: int = 120,
     ) -> List[Path]:
-        """Extracts sampled JPG frames for Vision models (DeepSeek, Claude, GPT-4o Vision)."""
+        """Extracts sampled JPG frames for Vision models."""
         src = Path(input_file).resolve()
         out_dir = Path(output_dir).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
 
         ffmpeg = cls._find_ffmpeg()
-        # Scale to max 720p width to save tokens and bandwidth
         frame_pattern = str(out_dir / "frame_%04d.jpg")
         cmd = [
             ffmpeg,
@@ -248,74 +294,11 @@ class MediaPreprocessor:
         ]
 
         try:
-            with _FFMPEG_LOCK:
-                res = run_quiet(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=SUBPROCESS_TIMEOUT_SEC,
-                )
+            with get_ffmpeg_lock():
+                res = run_quiet(cmd, text=True, timeout=SUBPROCESS_TIMEOUT_SEC)
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"FFmpeg 抽帧超时 (>{SUBPROCESS_TIMEOUT_SEC}s): 视频可能过大或不可解码。"
-            ) from e
+            raise RuntimeError(f"FFmpeg 抽帧超时 (>{SUBPROCESS_TIMEOUT_SEC}s)") from e
         if res.returncode != 0:
             raise RuntimeError(f"FFmpeg 抽帧失败: {res.stderr}")
 
-        frames = sorted(out_dir.glob("frame_*.jpg"))
-        return frames
-
-    @classmethod
-    def compress_video_for_multimodal(
-        cls,
-        input_file: str | Path,
-        output_file: Optional[str | Path] = None,
-        target_height: int = 480,
-    ) -> Path:
-        """Compresses a video to 480p 15fps lightweight MP4.
-
-        Note:
-            The historical docstring implied this only ran for files larger
-            than 100MB, but the implementation is *unconditional*. Currently
-            no caller invokes this method. Intended to be used before uploading
-            oversized videos to multimodal backends.
-        """
-        src = Path(input_file).resolve()
-        dst = Path(output_file).resolve() if output_file else src.parent / f"{src.stem}_480p.mp4"
-        dst.parent.mkdir(parents=True, exist_ok=True)
-
-        ffmpeg = cls._find_ffmpeg()
-        cmd = [
-            ffmpeg,
-            "-y",
-            "-i", str(src),
-            "-vf", f"scale=-2:{target_height}",
-            "-r", "15",
-            "-c:v", "libx264",
-            "-crf", "30",
-            "-preset", "veryfast",
-            "-c:a", "aac",
-            "-ar", "16000",
-            "-ac", "1",
-            "-b:a", "64k",
-            str(dst),
-        ]
-
-        try:
-            with _FFMPEG_LOCK:
-                res = run_quiet(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=SUBPROCESS_TIMEOUT_SEC,
-                )
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"FFmpeg 视频压缩超时 (>{SUBPROCESS_TIMEOUT_SEC}s): 文件可能过大。"
-            ) from e
-        if res.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
-            raise RuntimeError(f"FFmpeg 视频压缩失败: {res.stderr}")
-
-        return dst
+        return sorted(out_dir.glob("frame_*.jpg"))

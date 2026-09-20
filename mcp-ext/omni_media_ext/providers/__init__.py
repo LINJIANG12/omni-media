@@ -1,19 +1,5 @@
-"""外部模型端点实现（两种协议：gemini / openai）。"""
-
-from __future__ import annotations
-
-from .base import BaseEndpoint, ProcessingResult, ProviderRequestError
-from .gemini import GeminiEndpoint
-from .openai import OpenAIEndpoint
-from .registry import build_endpoint, build_endpoint_from_config, list_protocols
-
-__all__ = [
-    "BaseEndpoint",
-    "ProcessingResult",
-    "ProviderRequestError",
-    "GeminiEndpoint",
-    "OpenAIEndpoint",
-    "build_endpoint",
-    "build_endpoint_from_config",
-    "list_protocols",
-]
+import sys
+from pathlib import Path
+_ROOT = str(Path(__file__).resolve().parents[3])
+if _ROOT not in sys.path: sys.path.insert(0, _ROOT)
+from omni_media.providers import *

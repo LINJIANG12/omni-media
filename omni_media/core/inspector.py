@@ -31,18 +31,6 @@ class StreamInfo:
 
 
 @dataclass
-class TokenEstimates:
-    """本版本只支持 gemini / openai 两种协议，故只保留这两家的估算口径。
-
-    （历史字段 qwen_vision_tokens / deepseek_vision_tokens 随那四家 provider 一并移除。）
-    """
-
-    gemini_audio_tokens: int
-    gemini_video_tokens: int
-    openai_audio_tokens: int
-
-
-@dataclass
 class MediaMetadata:
     file_path: str
     file_name: str
@@ -65,7 +53,7 @@ class MediaMetadata:
         streams_desc = []
         for s in self.streams:
             if s.get("codec_type") == "video":
-                fps = s.get("fps")  # may be None for variable/unreported framerate
+                fps = s.get("fps")
                 fps_str = f"{fps:.1f}" if fps else "可变/未知"
                 streams_desc.append(
                     f"- 📹 视频轨: `{s.get('codec_name')}` {s.get('width')}x{s.get('height')} @ {fps_str}fps"
@@ -76,6 +64,7 @@ class MediaMetadata:
                 )
 
         streams_str = "\n".join(streams_desc) if streams_desc else "- (无音视频轨道)"
+        oneshot_rec = "✅ 推荐整片直读 (≤75分钟)" if self.duration_seconds <= 4500 else "⚠️ 超过 75 分钟建议分卷切片"
 
         return f"""### 📊 媒体文件探测报告: `{self.file_name}`
 
@@ -86,25 +75,23 @@ class MediaMetadata:
 {streams_str}
 
 #### 🎯 多模态 Token 预算预估:
-- **Gemini 协议（音轨内联）**: ~`{self.estimates.get('gemini_audio_tokens', 0):,}` Tokens
-- **Gemini 协议（含画面）**: ~`{self.estimates.get('gemini_video_tokens', 0):,}` Tokens
-- **OpenAI 协议（input_audio / transcriptions）**: ~`{self.estimates.get('openai_audio_tokens', 0):,}` Tokens
+- **音频流直读预估**: ~`{self.estimates.get('audio_tokens', 0):,}` Tokens (Gemini/Host: ~32/s, OpenAI: ~21/s)
+- **视音频多模态预估**: ~`{self.estimates.get('video_tokens', 0):,}` Tokens
+- **整片直读判断**: {oneshot_rec}
 
-> 💡 **处理策略**: `{self.recommended_mode}`
-> 推荐协议通道: **{self.recommended_provider}**
-> 实际使用哪个端点由配置文件 `active` / 工具参数 `endpoint` 决定。
+> 💡 **系统推荐策略**: `{self.recommended_mode}`
+> 推荐通道: **{self.recommended_provider}**
 """
 
 
 class MediaInspector:
-    """Probes media metadata using ffprobe with zero external heavy dependencies."""
+    """Probes media metadata using ffprobe with fallback to ffmpeg."""
 
     @staticmethod
     def _find_ffprobe() -> Optional[str]:
         bin_path = shutil.which("ffprobe")
         if bin_path:
             return bin_path
-        # Windows Winget standard paths
         local_app_data = os.environ.get("LOCALAPPDATA", "")
         if local_app_data:
             winget_path = Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
@@ -137,7 +124,7 @@ class MediaInspector:
                 str(path),
             ]
             try:
-                res = run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
+                res = run_quiet(cmd, text=True, timeout=PROBE_TIMEOUT_SEC)
                 if res.returncode == 0 and res.stdout:
                     data = json.loads(res.stdout)
                     fmt = data.get("format", {})
@@ -148,7 +135,6 @@ class MediaInspector:
                         ctype = s.get("codec_type")
                         cname = s.get("codec_name", "")
                         if ctype == "video":
-                            # calculate fps
                             fps_val = None
                             r_frame_rate = s.get("r_frame_rate", "")
                             if "/" in r_frame_rate:
@@ -175,21 +161,14 @@ class MediaInspector:
                                     bitrate=int(s.get("bit_rate")) if s.get("bit_rate") else None,
                                 )
                             )
-            except Exception as exc:  # ffprobe ran but failed to parse
-                logger.warning("ffprobe 媒体探测失败，将回退按扩展名/ffmpeg 判定: %s", exc)
+            except Exception as exc:
+                logger.warning("ffprobe 探测失败，回退解析: %s", exc)
 
-        # Fallback if ffprobe couldn't get duration
         if duration <= 0:
             ffmpeg_bin = shutil.which("ffmpeg")
             if ffmpeg_bin:
                 try:
-                    res = run_quiet(
-                        [ffmpeg_bin, "-i", str(path)],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=PROBE_TIMEOUT_SEC,
-                    )
+                    res = run_quiet([ffmpeg_bin, "-i", str(path)], text=True, timeout=PROBE_TIMEOUT_SEC)
                     m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", res.stderr)
                     if m:
                         hours, minutes, seconds = float(m.group(1)), float(m.group(2)), float(m.group(3))
@@ -199,7 +178,6 @@ class MediaInspector:
 
         has_video = any(s.codec_type == "video" for s in streams)
         has_audio = any(s.codec_type == "audio" for s in streams)
-        # If no streams detected, guess by extension
         if not streams:
             if path.suffix.lower() in VIDEO_EXTS:
                 has_video = True
@@ -207,36 +185,33 @@ class MediaInspector:
             elif path.suffix.lower() in AUDIO_EXTS:
                 has_audio = True
 
-        # Human-readable duration
         hrs = int(duration // 3600)
         mins = int((duration % 3600) // 60)
         secs = int(duration % 60)
         dur_human = f"{hrs:02d}:{mins:02d}:{secs:02d}" if hrs > 0 else f"{mins:02d}:{secs:02d}"
 
-        # Token Estimations（只保留本版本支持的两种协议口径）
-        # Gemini Audio: ~32 tokens per second (16kHz)
-        gemini_audio = int(duration * 32)
-        # Gemini Video: ~260 visual tokens per second (1 fps) + 32 audio tokens per second
-        gemini_video = int(duration * 292) if has_video else gemini_audio
-        # OpenAI audio: ~100 tokens per second average
-        openai_audio = int(duration * 100)
+        # Native / Gemini: 32 tokens/sec; OpenAI: ~21 tokens/sec
+        audio_tokens = int(duration * 32)
+        video_tokens = int(duration * 292) if has_video else audio_tokens
+        openai_audio_tokens = int(duration * 21)
 
         estimates = {
-            "gemini_audio_tokens": gemini_audio,
-            "gemini_video_tokens": gemini_video,
-            "openai_audio_tokens": openai_audio,
+            "audio_tokens": audio_tokens,
+            "video_tokens": video_tokens,
+            "gemini_audio_tokens": audio_tokens,
+            "gemini_video_tokens": video_tokens,
+            "openai_audio_tokens": openai_audio_tokens,
         }
 
-        # Recommendations
         if has_video and not has_audio:
-            rec_mode = "仅画面无声：本版本只处理音轨，该文件无可用音频"
-            rec_prov = "（无）"
+            rec_mode = "仅画面无声：无音频轨道，需使用视觉模型直接分析画面"
+            rec_prov = "宿主视觉多模态内核"
         elif has_video:
-            rec_mode = "视频容器：先抽 16kHz 单声道人声，再交外部模型；画面不参与（v1 不做抽帧）"
-            rec_prov = "gemini（音轨内联） / openai（chat 或 transcriptions）"
+            rec_mode = "标准网课/讲座视音频：默认抽取 16kHz 单声道人声切片供直读"
+            rec_prov = "音频多模态内核 (read_audio / read_media)"
         else:
-            rec_mode = "纯音频：可直接送外部模型，Gemini 走 inlineData、OpenAI 走 input_audio 或 transcriptions"
-            rec_prov = "gemini / openai（由配置文件 active 决定）"
+            rec_mode = "纯音频文件：原生单声道直读，零重编码"
+            rec_prov = "音频多模态内核 (read_audio / read_media)"
 
         return MediaMetadata(
             file_path=str(path),

@@ -1,12 +1,5 @@
-"""Core utilities for media inspection, preprocessing, and temporary file management."""
-
-from .temp_manager import ManagedTempDir
-from .inspector import MediaInspector, MediaMetadata
-from .preprocessor import MediaPreprocessor
-
-__all__ = [
-    "ManagedTempDir",
-    "MediaInspector",
-    "MediaMetadata",
-    "MediaPreprocessor",
-]
+import sys
+from pathlib import Path
+_ROOT = str(Path(__file__).resolve().parents[3])
+if _ROOT not in sys.path: sys.path.insert(0, _ROOT)
+from omni_media.core import *

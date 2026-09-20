@@ -1,3 +1,5 @@
-"""OmniMedia MCP: Universal Multimodal Audio/Video Native Reading MCP Server."""
-
-__version__ = "0.2.0"
+import sys
+from pathlib import Path
+_ROOT = str(Path(__file__).resolve().parents[2])
+if _ROOT not in sys.path: sys.path.insert(0, _ROOT)
+from omni_media import *
