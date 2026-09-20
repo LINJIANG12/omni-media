@@ -6,14 +6,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from .core.limits import (
-    MAX_CONCURRENT_FFMPEG,
-    OPENAI_AUDIO_FORMATS,
-    OPENAI_MODE_WHITELIST,
-    PROTOCOL_WHITELIST,
-)
+from .core.limits import MAX_CONCURRENT_FFMPEG
 
 CONFIG_FILENAME = "config.json"
 EXAMPLE_FILENAME = "config.example.json"
@@ -220,7 +215,6 @@ def load_config(explicit: Optional[str | Path] = None) -> Config:
     if not isinstance(data, dict):
         raise ConfigError(f"配置文件 `{path}` 顶层必须是 JSON 对象。")
 
-    problems: List[str] = []
     defaults = Defaults()
     if "defaults" in data:
         raw_d = data["defaults"]

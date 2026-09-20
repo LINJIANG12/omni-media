@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 from .adapters.base import build_generic_config
 from .adapters.registry import get_adapter, get_all_adapters, list_supported_targets
-from .config import ConfigError, candidate_paths, default_config_path, find_config_file, load_config
+from .config import ConfigError, default_config_path, find_config_file, load_config
 from .core.inspector import MediaInspector
 from .server import create_server
 

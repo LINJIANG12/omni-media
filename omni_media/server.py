@@ -7,17 +7,16 @@ import asyncio
 import hashlib
 import json
 import os
-import sys
 import uuid
 from pathlib import Path
-from typing import Annotated, Any, Dict, Optional, Union
+from typing import Annotated, Optional, Union
 
 from pydantic import Field
 
 from mcp.server.mcpserver import Audio, Context, MCPServer
 from mcp.types import ToolAnnotations
 
-from .config import Config, ConfigError, load_config
+from .config import load_config
 from .core.inspector import MediaInspector
 from .core.limits import (
     DEFAULT_SAFE_SLICE_MINUTES,

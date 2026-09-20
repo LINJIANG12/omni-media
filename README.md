@@ -61,18 +61,20 @@ omni-media-ext status --probe           # 环境 + 配置 + 端点可达性 + �
 
 ```text
 omni-media/
-├── mcp/          ← omni-media-mcp：宿主原生听音（read_audio），零凭证
-│   ├── omni_media_mcp/     包源码（server / cli / adapters / preprocessor）
-│   ├── selfcheck.py        工具契约与适配器自检
+├── omni_media/   ← 统一 MCP 核心包（server / cli / adapters / providers / core）
+├── mcp/          ← omni-media-mcp：宿主原生听音（read_audio）兼容层，零凭证
+│   ├── omni_media_mcp/     兼容 Shim 与入口
+│   ├── selfcheck.py        工具契约自检
 │   └── README.md           详细文档（含各宿主配置接入规范）
-└── mcp-ext/      ← omni-media-ext：外部模型代读（read_media），配置驱动
-    ├── omni_media_ext/     包源码（server / cli / config / payloads）
-    ├── tests/              兼容契约与端到端测试
-    └── README.md           详细文档
+├── mcp-ext/      ← omni-media-ext：外部模型代读（read_media）兼容层，配置驱动
+│   ├── omni_media_ext/     兼容 Shim 与入口
+│   └── README.md           详细文档
+├── pyproject.toml← 统一包工程声明（提供 omni-media / omni-media-ext 入口）
+└── selfcheck.py  ← 统一架构与工具面全量自检
 ```
 
-**两个服务互不 import**，任一方缺席都不影响另一方。二者唯一的共同约定是分页与续读状态注释
-`<!-- OMNI_STATUS: {...} -->`，当前 `contract_version` 为 `1`——契约由 `mcp-ext/tests/test_compatibility.py` 与两侧 `selfcheck.py` 钉死。
+两条通道均由统一核心包 `omni_media/` 提供完整实现，`mcp/` 与 `mcp-ext/` 作为向后兼容 Shim 确保平滑迁移。二者唯一的共同约定是分页与续读状态注释
+`<!-- OMNI_STATUS: {...} -->`，当前 `contract_version` 为 `1`——契约由根目录与子目录 `selfcheck.py` 严格校验。
 
 ---
 
