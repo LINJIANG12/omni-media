@@ -1,12 +1,12 @@
 {
-  "_note": "omni-media-ext 配置模板。复制为 config.json 后填入 api_key 即可；本服务只读配置文件，不读任何环境变量。",
+  "_note": "omni-media 外部模型端点配置模板。执行 `omni-media config init` 会在配置位置生成一份同样的文件；填入 api_key 即可。本服务只读配置文件，不读任何凭证环境变量。以下划线开头的键一律按注释跳过。",
   "active": "gemini-flash",
   "defaults": {
-    "slice_minutes": 10,
-    "max_payload_mb": 18,
+    "slice_minutes": 30,
+    "max_payload_mb": 35,
     "timeout_sec": 300,
     "max_retries": 2,
-    "max_concurrency": 3
+    "max_concurrency": 5
   },
   "endpoints": {
     "gemini-flash": {

@@ -41,9 +41,19 @@ _MODE_PROMPTS = {
 
 
 def mode_prompt(mode: str, instruction: str | None = None) -> str:
-    """Builds prompt for the given mode and optional user instruction."""
+    """Builds prompt for the given mode and optional user instruction.
+
+    `custom` 的存在意义就是调用方自带提示词：缺了它，`_MODE_PROMPTS["custom"]` 是空串，
+    这里会返回空提示词并**照常发出一次请求**——模型只能自行发挥，结果不可预期且要花钱。
+    所以 `custom` + 空 instruction 直接拒绝（第二阶段 B7）。
+    """
     base = _MODE_PROMPTS.get(mode, "")
     extra = (instruction or "").strip()
+    if mode == "custom" and not extra:
+        raise ValueError(
+            "mode='custom' 必须同时提供 prompt：custom 就是用你自己的提示词，"
+            "缺了它等于没有任务。想用内置任务请改用 transcribe / summarize / qa。"
+        )
     if extra:
         if base:
             return f"{base}\n\n【用户专属指示】：\n{extra}"

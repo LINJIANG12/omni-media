@@ -1,7 +1,7 @@
 """协议注册表：`protocol` 字符串 → 端点实现类。
 
-新增协议时只需在这里登记，并在 `core/limits.py` 的 `PROTOCOL_WHITELIST` 里放行
-（配置校验与注册表两处必须同时改，否则要么配不出来、要么配出来没人实现）。
+新增协议时只需在 `ENDPOINT_MAP` 里登记一处即可（注册表就是唯一的放行名单：
+`build_endpoint` 对未登记的协议会给出明确错误，不存在第二处需要同步的名单）。
 """
 
 from __future__ import annotations
@@ -33,7 +33,3 @@ def build_endpoint(endpoint: Endpoint, defaults: Defaults) -> BaseEndpoint:
 def build_endpoint_from_config(config: Config, name: str | None = None) -> BaseEndpoint:
     """从配置里解析端点名并实例化。"""
     return build_endpoint(config.resolve(name), config.defaults)
-
-
-def list_protocols() -> list[str]:
-    return sorted(ENDPOINT_MAP)

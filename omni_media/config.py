@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .core.limits import MAX_CONCURRENT_FFMPEG
-
 CONFIG_FILENAME = "config.json"
+# 模板与包同住：无论源码检出还是 pip 安装，`config init` 都读得到同一份；
+# 不再另存一份仓库根模板（两份必然漂移，实测已经漂移过）。
 EXAMPLE_FILENAME = "config.example.json"
 USER_CONFIG_DIRNAME = ".omni-media"
 LEGACY_USER_CONFIG_DIRNAME = ".omni-media-ext"
@@ -20,6 +20,22 @@ _AUTH_HEADER_NAMES = frozenset({"authorization", "x-goog-api-key", "api-key", "x
 _PLACEHOLDERS = frozenset(
     {"replace_me", "your_api_key", "your-api-key", "your_key", "changeme", "todo", "xxx", "sk-xxx"}
 )
+
+# 协议白名单。必须与 `providers/registry.py::ENDPOINT_MAP` 一致——不在这里 import 它是为了
+# 避开 `config ← registry` 的循环导入；两者一致由 `tests/test_config.py` 的用例钉住。
+SUPPORTED_PROTOCOLS = frozenset({"gemini", "openai"})
+OPENAI_MODES = frozenset({"chat", "transcriptions"})
+
+_URL_RE = re.compile(r"^https?://[^\s/]+", re.IGNORECASE)
+
+# `defaults` 各键 → (目标类型, 下界, 是否允许取到下界)
+_DEFAULTS_SPEC: Dict[str, Any] = {
+    "slice_minutes": (float, 0.0, False),
+    "max_payload_mb": (int, 0, False),
+    "timeout_sec": (int, 0, False),
+    "max_retries": (int, 0, True),
+    "max_concurrency": (int, 1, True),
+}
 
 
 class ConfigError(ValueError):
@@ -37,6 +53,11 @@ def strip_json_comments(text: str) -> str:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def example_config_path() -> Path:
+    """`config init` 使用的模板路径（与包同住，安装后依然可用）。"""
+    return Path(__file__).resolve().parent / EXAMPLE_FILENAME
 
 
 def user_config_path() -> Path:
@@ -89,7 +110,8 @@ def find_config_file(explicit: Optional[str | Path] = None) -> Path:
     listed = "\n".join(f"  {i}. {p}" for i, p in enumerate(candidates, 1))
     raise ConfigError(
         f"未找到配置文件。按以下顺序查找，均不存在：\n{listed}\n"
-        f"请运行 `omni-media config --init` 或配置 config.json"
+        # 注意：`init` 是**位置参数**（`config init`），写成 `config --init` 会被 argparse 拒绝。
+        f"请运行 `omni-media config init` 生成模板，或手动创建上述任一路径的 config.json"
     )
 
 
@@ -103,11 +125,11 @@ def mask_secret(value: str) -> str:
 
 @dataclass
 class Defaults:
-    slice_minutes: float = 10.0
-    max_payload_mb: int = 20
+    slice_minutes: float = 30.0
+    max_payload_mb: int = 35
     timeout_sec: int = 120
     max_retries: int = 2
-    max_concurrency: int = MAX_CONCURRENT_FFMPEG
+    max_concurrency: int = 5
 
     @property
     def max_payload_bytes(self) -> int:
@@ -126,6 +148,11 @@ class Endpoint:
     audio_format: str = "mp3"
     text_model: str = ""
     language: str = ""
+
+    def __post_init__(self) -> None:
+        # 尾斜杠会拼出 `//`（`f"{base_url}/models/..."`）：多数网关容忍，少数 404。
+        # 归一化放在这里，是因为 URL 是各处直接拼的，收口在这一处最省事也最不容易漏。
+        self.base_url = self.base_url.strip().rstrip("/")
 
     def auth_ready(self) -> bool:
         if self.api_key.strip() and self.api_key.strip().lower() not in _PLACEHOLDERS:
@@ -203,6 +230,81 @@ class Config:
         }
 
 
+def _parse_defaults(raw_d: Any, path: Path) -> Defaults:
+    """`defaults` 段的最小校验：类型可转、数值在合法下界之上。
+
+    以前这里是裸 `int()` / `float()`，给 `"slice_minutes": "soon"` 会抛
+    `ValueError: invalid literal for int() with base 10: 'soon'`——既没说清是哪个键，
+    也不是 `ConfigError`，调用方无法统一处理。
+    """
+    defaults = Defaults()
+    if raw_d is None:
+        return defaults
+    if not isinstance(raw_d, dict):
+        raise ConfigError(
+            f"`defaults` 必须是 JSON 对象，收到 {type(raw_d).__name__}（配置 `{path}`）"
+        )
+    for key, (kind, lower, allow_equal) in _DEFAULTS_SPEC.items():
+        if key not in raw_d:
+            continue
+        raw = raw_d[key]
+        try:
+            value = kind(raw)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"`defaults.{key}` 必须是{'数字' if kind is float else '整数'}，"
+                f"收到 {raw!r}（配置 `{path}`）"
+            )
+        if not (value >= lower if allow_equal else value > lower):
+            raise ConfigError(
+                f"`defaults.{key}` 必须 {'≥' if allow_equal else '>'} {lower}，"
+                f"收到 {raw!r}（配置 `{path}`）"
+            )
+        setattr(defaults, key, value)
+    return defaults
+
+
+def _parse_endpoint(name: str, ep_data: Any, path: Path) -> Endpoint:
+    """单个端点的必填字段与取值校验。所有错误都带端点名与键名。"""
+    if not isinstance(ep_data, dict):
+        raise ConfigError(
+            f"端点 `{name}` 必须是 JSON 对象，收到 {type(ep_data).__name__}（配置 `{path}`）"
+        )
+    ep = Endpoint(
+        name=name,
+        protocol=str(ep_data.get("protocol", "gemini")).lower().strip(),
+        base_url=str(ep_data.get("base_url", "")),
+        model=str(ep_data.get("model", "")).strip(),
+        api_key=str(ep_data.get("api_key", "")),
+        headers=dict(ep_data.get("headers", {}) or {}),
+        openai_mode=str(ep_data.get("openai_mode", "chat")).strip(),
+        audio_format=str(ep_data.get("audio_format", "mp3")),
+        text_model=str(ep_data.get("text_model", "")),
+        language=str(ep_data.get("language", "")),
+    )
+
+    where = f"`endpoints.{name}`（配置 `{path}`）"
+    if ep.protocol not in SUPPORTED_PROTOCOLS:
+        raise ConfigError(
+            f"{where} 的 protocol=`{ep.protocol}` 未实现。"
+            f"可用协议: {', '.join(sorted(SUPPORTED_PROTOCOLS))}"
+        )
+    if not ep.base_url:
+        raise ConfigError(f"{where} 缺少 base_url")
+    if not _URL_RE.match(ep.base_url):
+        raise ConfigError(
+            f"{where} 的 base_url=`{ep.base_url}` 不像 URL（应以 http:// 或 https:// 开头）"
+        )
+    if not ep.model:
+        raise ConfigError(f"{where} 缺少 model")
+    if ep.protocol == "openai" and ep.openai_mode not in OPENAI_MODES:
+        raise ConfigError(
+            f"{where} 的 openai_mode=`{ep.openai_mode}` 无效。"
+            f"可用: {', '.join(sorted(OPENAI_MODES))}"
+        )
+    return ep
+
+
 def load_config(explicit: Optional[str | Path] = None) -> Config:
     path = find_config_file(explicit)
     text = path.read_text(encoding="utf-8")
@@ -215,34 +317,20 @@ def load_config(explicit: Optional[str | Path] = None) -> Config:
     if not isinstance(data, dict):
         raise ConfigError(f"配置文件 `{path}` 顶层必须是 JSON 对象。")
 
-    defaults = Defaults()
-    if "defaults" in data:
-        raw_d = data["defaults"]
-        if isinstance(raw_d, dict):
-            for k in ("slice_minutes", "max_payload_mb", "timeout_sec", "max_retries", "max_concurrency"):
-                if k in raw_d:
-                    setattr(defaults, k, float(raw_d[k]) if k == "slice_minutes" else int(raw_d[k]))
+    defaults = _parse_defaults(data.get("defaults"), path)
 
     endpoints: Dict[str, Endpoint] = {}
     raw_eps = data.get("endpoints", {})
-    if isinstance(raw_eps, dict):
-        for name, ep_data in raw_eps.items():
-            if str(name).startswith(_COMMENT_KEY_PREFIX):
-                continue
-            if isinstance(ep_data, dict):
-                ep = Endpoint(
-                    name=name,
-                    protocol=str(ep_data.get("protocol", "gemini")).lower(),
-                    base_url=str(ep_data.get("base_url", "")),
-                    model=str(ep_data.get("model", "")),
-                    api_key=str(ep_data.get("api_key", "")),
-                    headers=dict(ep_data.get("headers", {})),
-                    openai_mode=str(ep_data.get("openai_mode", "chat")),
-                    audio_format=str(ep_data.get("audio_format", "mp3")),
-                    text_model=str(ep_data.get("text_model", "")),
-                    language=str(ep_data.get("language", "")),
-                )
-                endpoints[name] = ep
+    if not isinstance(raw_eps, dict):
+        raise ConfigError(
+            f"`endpoints` 必须是 JSON 对象，收到 {type(raw_eps).__name__}（配置 `{path}`）"
+        )
+    for name, ep_data in raw_eps.items():
+        if str(name).startswith(_COMMENT_KEY_PREFIX):
+            continue
+        endpoints[name] = _parse_endpoint(name, ep_data, path)
 
+    # `active` 故意不在这里校验：`config show` 必须能把「active 指向了不存在的端点」
+    # 这种配置**显示出来**给人看。真正用到端点时 `Config.resolve()` 会给出带可用列表的错误。
     active = str(data.get("active", "")).strip()
     return Config(path=path, active=active, defaults=defaults, endpoints=endpoints)

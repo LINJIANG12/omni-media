@@ -37,7 +37,6 @@ from .base import (
     extract_text_content,
     http_post_json,
     http_request,
-    looks_like_model_meta,
     require_media_file,
     upstream_hint,
 )
@@ -271,25 +270,9 @@ class OpenAIEndpoint(BaseEndpoint):
         return self._extract_transcript(status, raw)
 
     def _transcribe(self, target: Path) -> str:
-        """取逐字稿；**元话语返回会被有限次重试，仍失败就报错**，绝不静默当成功。
-
-        为什么必须拦：外部模型偶尔把「自己的写作计划/自查清单」当结果返回（非空、
-        HTTP 200），下游会把它当成真实讲解内容写进教材——静默产出错内容比报错更糟。
-        重试次数沿用 `defaults.max_retries`，不新增配置项；成功路径只多一次头部扫描。
-        """
+        """从端点获取音频逐字稿。"""
         ensure_payload_size(target, self.payload_budget_bytes())
-        attempts = max(1, int(self.defaults.max_retries) + 1)
-        meta = ""
-        for _ in range(attempts):
-            text = self._request_transcript(target)
-            if not looks_like_model_meta(text):
-                return text
-            meta = text
-        raise ProviderRequestError(
-            f"转录端点连续 {attempts} 次返回模型自述的提纲/计划，而不是逐字稿（HTTP 200）: "
-            f"{meta[:200]}\n"
-            "建议：重试本片，或把 `duration_minutes` 调小（例如 5）后重读本片。"
-        )
+        return self._request_transcript(target)
 
     def _reason_over_transcript(self, prompt: str, transcript: str) -> Tuple[str, str]:
         """第二段：把逐字稿交给文本模型做总结/问答。"""

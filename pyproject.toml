@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omni-media"
-version = "0.3.0"
+version = "0.4.0"
 description = "Universal Multimodal Audio/Video Reading & Transcription MCP Server for AI Agents"
 authors = [{ name = "OmniMedia Team" }]
 license = { text = "MIT" }
@@ -14,12 +14,37 @@ dependencies = [
     "mcp>=2.1.0,<3",
 ]
 
+# 四个启动器各自绑定唯一实现。
+#
+# 两条听音通道靠**注册名**区分，因此这里不能像过去那样把 `omni-media-mcp` 与
+# `omni-media-ext-mcp` 都指向同一个 `server:main`（默认 mode=all）：那会让两个启动器
+# 成为同一份字节，宿主工具列表上也看不出装的是哪条通道。现在各自带自己的默认模式。
+#
+# CLI 入口返回退出码 int（setuptools 生成的启动器会 `sys.exit(main())`）。
 [project.scripts]
 omni-media = "omni_media.cli:main"
 omni-media-ext = "omni_media.cli:main_ext"
-omni-media-mcp = "omni_media.server:main"
-omni-media-ext-mcp = "omni_media.server:main"
+omni-media-mcp = "omni_media.server:main_native"
+omni-media-ext-mcp = "omni_media.server:main_ext"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["omni_media*"]
+
+# 配置模板随包分发：`config init` 在源码检出与 pip 安装两种情况下读的都是这一份。
+[tool.setuptools.package-data]
+omni_media = ["config.example.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `-m "not network"` 让 marker 的承诺成真：默认不跑需要真实端点/网络的用例。
+# 命令行上再给一个 `-m`（如 `-m network`）会覆盖这里的值——pytest 取最后一个 `-m`。
+# 目前仓库里还没有 network 用例，所以这一条不改变现有结果；它的作用是**防未来踩坑**：
+# 以后有人加一个 @pytest.mark.network 的用例，它不会默认进 CI。
+addopts = '-ra -m "not network"'
+markers = [
+    "network: 需要真实外部端点/网络的用例（默认不跑，用 -m network 显式选择）",
+]

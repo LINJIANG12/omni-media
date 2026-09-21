@@ -14,20 +14,10 @@ from typing import List, Optional
 from .limits import AUDIO_BITRATE_VOICE, MAX_CONCURRENT_FFMPEG, SUBPROCESS_TIMEOUT_SEC
 from .proc import run_quiet
 
-_CURRENT_MAX_CONCURRENCY: int = MAX_CONCURRENT_FFMPEG
-_CONCURRENCY_MUTEX = threading.Lock()
+# FFmpeg 并发闸：全进程单一实例。并发上限是模块常量 `MAX_CONCURRENT_FFMPEG`，
+# 不提供运行时改档口——原先的 `set_max_concurrency` 与配置键 `max_concurrency` 从未被调用过，
+# 留着只会让「配了却不生效」变成陷阱。
 _FFMPEG_LOCK = threading.BoundedSemaphore(MAX_CONCURRENT_FFMPEG)
-
-
-def set_max_concurrency(val: int) -> None:
-    """Dynamically update FFmpeg concurrency semaphore limit."""
-    global _FFMPEG_LOCK, _CURRENT_MAX_CONCURRENCY
-    if val <= 0:
-        return
-    with _CONCURRENCY_MUTEX:
-        if val != _CURRENT_MAX_CONCURRENCY:
-            _FFMPEG_LOCK = threading.BoundedSemaphore(val)
-            _CURRENT_MAX_CONCURRENCY = val
 
 
 def get_ffmpeg_lock() -> threading.BoundedSemaphore:
@@ -49,10 +39,6 @@ def _atomic_replace_file(src: Path, dst: Path, retries: int = 4, delay: float = 
 
 class MediaPreprocessor:
     """Performs fast stream extractions and transcodings with FFmpeg."""
-
-    @classmethod
-    def set_max_concurrency(cls, val: int) -> None:
-        set_max_concurrency(val)
 
     @staticmethod
     def _find_ffmpeg() -> str:
@@ -219,86 +205,3 @@ class MediaPreprocessor:
                     pass
 
         return dst
-
-    @classmethod
-    def slice_video(
-        cls,
-        input_file: str | Path,
-        output_file: Optional[str | Path] = None,
-        start_time: Optional[str | int | float] = None,
-        duration_seconds: Optional[float] = None,
-    ) -> Path:
-        """Slices video segment for vision multimodal processing."""
-        src = Path(input_file).resolve()
-        if not src.exists():
-            raise FileNotFoundError(f"输入文件不存在: {input_file}")
-
-        dst = Path(output_file).resolve() if output_file else src.parent / f"{src.stem}_slice.mp4"
-        dst.parent.mkdir(parents=True, exist_ok=True)
-
-        ffmpeg = cls._find_ffmpeg()
-        cmd = [ffmpeg, "-y"]
-
-        if start_time is not None:
-            cmd.extend(["-ss", str(start_time)])
-
-        cmd.extend(["-i", str(src)])
-
-        if duration_seconds is not None:
-            cmd.extend(["-t", str(duration_seconds)])
-
-        cmd.extend([
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "28",
-            "-c:a", "aac",
-            "-ar", "16000",
-            "-ac", "1",
-            "-b:a", "64k",
-            str(dst),
-        ])
-
-        try:
-            with get_ffmpeg_lock():
-                res = run_quiet(cmd, text=True, timeout=SUBPROCESS_TIMEOUT_SEC)
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"FFmpeg 视频切片超时 (>{SUBPROCESS_TIMEOUT_SEC}s)") from e
-        if res.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
-            raise RuntimeError(f"FFmpeg 视频切片失败: {res.stderr}")
-
-        return dst
-
-    @classmethod
-    def extract_video_keyframes(
-        cls,
-        input_file: str | Path,
-        output_dir: str | Path,
-        fps: float = 1.0,
-        max_frames: int = 120,
-    ) -> List[Path]:
-        """Extracts sampled JPG frames for Vision models."""
-        src = Path(input_file).resolve()
-        out_dir = Path(output_dir).resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        ffmpeg = cls._find_ffmpeg()
-        frame_pattern = str(out_dir / "frame_%04d.jpg")
-        cmd = [
-            ffmpeg,
-            "-y",
-            "-i", str(src),
-            "-vf", f"fps={fps},scale='min(1280,iw)':-2",
-            "-q:v", "3",
-            "-frames:v", str(max_frames),
-            frame_pattern,
-        ]
-
-        try:
-            with get_ffmpeg_lock():
-                res = run_quiet(cmd, text=True, timeout=SUBPROCESS_TIMEOUT_SEC)
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"FFmpeg 抽帧超时 (>{SUBPROCESS_TIMEOUT_SEC}s)") from e
-        if res.returncode != 0:
-            raise RuntimeError(f"FFmpeg 抽帧失败: {res.stderr}")
-
-        return sorted(out_dir.glob("frame_*.jpg"))

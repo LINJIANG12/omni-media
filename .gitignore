@@ -1,9 +1,7 @@
-# 仓库根级兜底：只放两个服务共用的通用忽略项。
+# 仓库级忽略项。本仓库只有一个包 `omni_media/`，不再有 per-子包 .gitignore。
 #
-# ⚠️ 各子目录另有自己的 .gitignore；此处几条缓存规则是**同向冗余**兜底，不要因为"重复"而删掉任一处。
-# 🔒 凭证兜底（**故意与 mcp-ext/.gitignore 重复**）：`config.json` 含明文 api_key。
-#    若唯一防线是子目录里的一行规则，则改名、挪位、误删规则或 `git add -f` 都能一击击穿；
-#    同向再加一道网，只加不减。
+# 🔒 凭证防线：`config.json` 是**活的本地配置**（含明文 api_key），配置模板只有
+#    `omni_media/config.example.json`（随包分发）。下面这条规则是仓库里唯一的一道网，不要删。
 
 __pycache__/
 *.py[cod]
@@ -15,6 +13,9 @@ dist/
 venv/
 .pytest_cache/
 
-# 本地实配（含明文 api_key）：只提交 config.example.json 模板
+# 本地实配（含明文 api_key）：只提交 omni_media/config.example.json 模板
 config.json
 config.local.json
+# `config init --force` 的自动备份同样含明文 api_key，必须一起挡住
+config.json.bak.*
+config.local.json.bak.*

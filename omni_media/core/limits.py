@@ -10,11 +10,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 SUBPROCESS_TIMEOUT_SEC: int = 300
 PROBE_TIMEOUT_SEC: int = 15
-MAX_INLINE_BYTES: int = 20 * 1024 * 1024  # 20 MiB
+# 原生直读的内联上限（超过就改走「切片落盘 + 给路径」通道，避免把大音频塞进上下文）。
+# 与 MAX_ONESHOT_MINUTES 是两件事：前者是**回传体积**闸，后者是**时长**闸。
 MAX_SAFE_INLINE_BYTES: int = 8 * 1024 * 1024  # 8 MiB
-DEFAULT_SAFE_SLICE_MINUTES: float = 10.0
+DEFAULT_SAFE_SLICE_MINUTES: float = float(os.environ.get("OMNI_DEFAULT_SLICE_MINUTES", "30.0"))
+# 单块硬上限（分钟）：超过它就不建议整片直读，改按 DEFAULT_SAFE_SLICE_MINUTES 分卷。
+# 「整片就绪」判定与探测报告里的建议文案都必须由它推导，不许再写字面量 4500。
 MAX_ONESHOT_MINUTES: float = 75.0
-MAX_CONCURRENT_FFMPEG: int = 3
+MAX_CONCURRENT_FFMPEG: int = int(os.environ.get("OMNI_MAX_CONCURRENT_FFMPEG", "5"))
 AUDIO_BITRATE_VOICE: str = "32k"
 ERROR_BODY_EXCERPT_CHARS: int = 500
 
@@ -34,9 +37,6 @@ MEDIA_EXTS: frozenset[str] = frozenset(VIDEO_EXTS | AUDIO_EXTS)
 # ---------------------------------------------------------------------------
 OUTPUT_MODE_WHITELIST: frozenset[str] = frozenset({"auto", "file", "inline"})
 MODE_WHITELIST: frozenset[str] = frozenset({"transcribe", "summarize", "qa", "custom"})
-PROTOCOL_WHITELIST: frozenset[str] = frozenset({"gemini", "openai"})
-OPENAI_MODE_WHITELIST: frozenset[str] = frozenset({"chat", "transcriptions"})
-OPENAI_AUDIO_FORMATS: frozenset[str] = frozenset({"mp3", "wav"})
 
 # Slices cache directory
 def get_slices_cache_dir() -> Path:

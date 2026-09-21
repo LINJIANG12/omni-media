@@ -1,14 +1,18 @@
-"""MCP client test: verify omni-media-mcp can read a local m4a audio over stdio.
+"""真端点端到端实测：走 stdio 验证 `read_audio`（宿主原生听音通道）。
 
-Walks the full MCP handshake (initialize -> list_tools -> call_tool) so we
-exercise the real protocol surface, not just in-process imports.
+这是**手动验证脚本**，不进自动化门禁。自动化测试见 `tests/test_native_mcp.py`
+与 `tests/test_end_to_end_stdio.py`。
 
-Usage (paths must be supplied, nothing is hardcoded to one machine):
+它会把完整的 MCP 握手（initialize -> list_tools -> call_tool）跑一遍，
+验证的是真实协议面，而不只是进程内 import。
+
+用法（路径必须自己给，脚本里不硬编码任何机器路径）：
+
     set OMNI_TEST_AUDIO=D:/courses/xx/audio/P01_intro.m4a
-    python test_mcp_audio.py
+    python examples/read_audio.py
 
-    # or as positional arguments
-    python test_mcp_audio.py "<audio file>" "<omni-media-mcp dir>"
+    # 或用位置参数
+    python examples/read_audio.py "<音频文件绝对路径>" ["<omni-media 仓库目录>"]
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 
 
 def _resolve_audio() -> Path:
@@ -29,7 +34,7 @@ def _resolve_audio() -> Path:
     if not raw:
         raise SystemExit(
             "未提供测试音频路径。用法：\n"
-            '  python test_mcp_audio.py "<音频文件绝对路径>" ["<omni-media-mcp 目录>"]\n'
+            '  python examples/read_audio.py "<音频文件绝对路径>" ["<omni-media 仓库目录>"]\n'
             "  或先设置环境变量 OMNI_TEST_AUDIO=<音频文件绝对路径>"
         )
     path = Path(raw).expanduser().resolve()
@@ -39,11 +44,11 @@ def _resolve_audio() -> Path:
 
 
 def _resolve_server_dir() -> Path:
-    """MCP 服务目录：命令行 > 环境变量 OMNI_TEST_SERVER_DIR > 本文件所在目录。"""
+    """MCP 服务目录：命令行 > 环境变量 OMNI_TEST_SERVER_DIR > 仓库根。"""
     raw = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("OMNI_TEST_SERVER_DIR", "")
-    server_dir = Path(raw).expanduser().resolve() if raw else HERE
-    if not (server_dir / "omni_media_mcp" / "server.py").is_file():
-        raise SystemExit(f"该目录下未找到 omni_media_mcp/server.py: {server_dir}")
+    server_dir = Path(raw).expanduser().resolve() if raw else REPO_ROOT
+    if not (server_dir / "omni_media" / "server.py").is_file():
+        raise SystemExit(f"该目录下未找到 omni_media/server.py: {server_dir}")
     return server_dir
 
 
@@ -57,16 +62,17 @@ async def main() -> int:
     test_audio = _resolve_audio()
     server_dir = _resolve_server_dir()
 
+    size_mib = test_audio.stat().st_size / (1024 * 1024)
     print(f"Python: {sys.version.split()[0]}")
     print(f"Audio file: {test_audio}")
     print(f"Server dir: {server_dir}")
-    print(f"File exists: {test_audio.exists()}, size: "
-          f"{test_audio.stat().st_size / (1024*1024):.2f} MiB" if test_audio.exists() else "MISSING")
+    print(f"File exists: {test_audio.exists()}, size: {size_mib:.2f} MiB")
 
     # 1) Spawn the MCP server over stdio
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "omni_media_mcp.server"],
+        # 显式钉住 native 通道：不写就是 all 模式，工具面会多出 read_media
+        args=["-m", "omni_media.server", "--mode", "native"],
         cwd=str(server_dir),
         env={"PYTHONPATH": str(server_dir), "PATH": os.environ.get("PATH", "")},
     )

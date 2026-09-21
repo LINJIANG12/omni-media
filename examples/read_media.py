@@ -1,19 +1,19 @@
-"""真端点端到端实测：用真实配置文件与真实密钥跑一次 `read_media`。
+"""真端点端到端实测：用真实配置文件与真实密钥跑一次 `read_media`（外部模型通道）。
 
 这是**手动验证脚本**，不进自动化门禁（需要真密钥、会真花钱）。自动化测试用的是
-进程内仿真端点，见 `tests/test_end_to_end_stdio.py`。
+进程内仿真端点，见 `tests/test_end_to_end_stdio_ext.py`。
 
 用法（路径与端点都从参数来，脚本里不硬编码任何机器路径）：
 
     # 1) 先确认配置就绪
-    python -m omni_media_ext.cli status
+    python -m omni_media.cli status
 
     # 2) 跑一次 1 分钟切片的逐字稿
-    python test_mcp_read_media.py "D:/courses/某课程/audio/P01.m4a" --duration 1
+    python examples/read_media.py "D:/courses/某课程/audio/P01.m4a" --duration 1
 
     # 3) 换端点 / 换任务预设
-    python test_mcp_read_media.py "D:/x.mp3" --endpoint openai-audio --mode summarize
-    python test_mcp_read_media.py "D:/x.mp3" --config "D:/my/config.json" --mode qa --instruction "讲了什么？"
+    python examples/read_media.py "D:/x.mp3" --endpoint openai-audio --mode summarize
+    python examples/read_media.py "D:/x.mp3" --mode qa --prompt "讲了什么？"
 """
 
 from __future__ import annotations
@@ -29,12 +29,12 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 _STATUS_RE = re.compile(r"<!-- OMNI_STATUS: (\{.*?\}) -->")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="omni-media-ext 真端点端到端实测")
+    parser = argparse.ArgumentParser(description="omni-media 外部模型通道真端点端到端实测")
     parser.add_argument("media", help="本地音视频文件的绝对路径")
     parser.add_argument("--config", "-c", default=None, help="配置文件路径（缺省走默认查找顺序）")
     parser.add_argument("--endpoint", "-e", default=None, help="配置里的端点名（缺省用 active）")
@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", "-m", default="transcribe",
         choices=["transcribe", "summarize", "qa", "custom"], help="任务预设",
     )
-    parser.add_argument("--instruction", "-i", default=None, help="自定义提示词（custom 必填）")
+    parser.add_argument("--prompt", "-p", default=None, help="自定义提示词（custom 必填）")
     parser.add_argument("--start", default=None, help="起始时间戳，如 00:00:00")
     parser.add_argument("--duration", "-d", type=float, default=1.0, help="本次切片分钟数（默认 1，省时省钱）")
     parser.add_argument("--skip-inspect", action="store_true", help="跳过 inspect_media")
@@ -68,7 +68,9 @@ async def main() -> int:
         "PATH": os.environ.get("PATH", ""),
         "PYTHONIOENCODING": "utf-8",
     }
-    server_args = ["-m", "omni_media_ext.server"]
+    # 显式钉住 ext 通道：不写就是 all 模式，工具面会多出 read_audio，
+    # 就验证不出「只挂外部模型通道」时的真实行为。
+    server_args = ["-m", "omni_media.server", "--mode", "ext"]
     if args.config:
         server_args += ["--config", str(Path(args.config).expanduser().resolve())]
 
@@ -106,8 +108,8 @@ async def main() -> int:
             }
             if args.endpoint:
                 arguments["endpoint"] = args.endpoint
-            if args.instruction:
-                arguments["instruction"] = args.instruction
+            if args.prompt:
+                arguments["prompt"] = args.prompt
             if args.start:
                 arguments["start_time"] = args.start
 

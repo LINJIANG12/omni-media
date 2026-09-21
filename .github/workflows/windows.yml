@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  mcp:
+  test:
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
@@ -13,7 +13,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
-        mcp-sdk: ["2.1.0", "latest"]
 
     steps:
       - uses: actions/checkout@v4
@@ -22,40 +21,20 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: |
-            mcp/requirements.txt
-            mcp-ext/requirements.txt
+          cache-dependency-path: pyproject.toml
 
       - name: Install ffmpeg
         shell: pwsh
         run: choco install ffmpeg -y --no-progress
 
-      - name: Install MCP SDK boundary
-        if: matrix.mcp-sdk != 'latest'
+      - name: Install package and dev dependencies
         shell: pwsh
-        run: python -m pip install "mcp==${{ matrix.mcp-sdk }}"
+        run: python -m pip install -e ".[dev]"
 
-      - name: Install source packages
+      - name: Self-check
         shell: pwsh
-        run: |
-          python -m pip install pytest
-          if ("${{ matrix.mcp-sdk }}" -eq "latest") {
-            python -m pip install -e .\mcp -e .\mcp-ext
-          } else {
-            python -m pip install -e .\mcp --no-deps
-            python -m pip install -e .\mcp-ext --no-deps
-          }
-
-      - name: Native selfcheck
-        shell: pwsh
-        working-directory: mcp
         run: python selfcheck.py
 
-      - name: External selfcheck
+      - name: Test suite
         shell: pwsh
-        working-directory: mcp-ext
-        run: python selfcheck.py
-
-      - name: Full test suite
-        shell: pwsh
-        run: python -m pytest mcp\tests mcp-ext\tests -q
+        run: python -m pytest -q

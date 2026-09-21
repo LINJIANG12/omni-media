@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import hashlib
 import json
 import os
@@ -14,13 +15,15 @@ from typing import Annotated, Optional, Union
 from pydantic import Field
 
 from mcp.server.mcpserver import Audio, Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from .config import load_config
+from .config import ConfigError, load_config
 from .core.inspector import MediaInspector
 from .core.limits import (
     DEFAULT_SAFE_SLICE_MINUTES,
     MAX_CONCURRENT_FFMPEG,
+    MAX_ONESHOT_MINUTES,
     MAX_SAFE_INLINE_BYTES,
     MEDIA_EXTS,
     MODE_WHITELIST,
@@ -31,10 +34,65 @@ from .core.limits import (
 from .core.preprocessor import MediaPreprocessor
 from .core.temp_manager import ManagedTempDir
 from .prompts import mode_prompt
+from .providers.base import ProviderRequestError
 from .providers.registry import build_endpoint_from_config
 
 STATUS_CONTRACT_VERSION = 1
 _ASYNC_FFMPEG_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_FFMPEG)
+
+# 预期内的失败：文案必须原样过 MCP 边界（第二阶段 B6）。
+# 工具抛裸 `ValueError` 时，SDK 会把正文压成 `Error executing tool read_media`，宿主 agent
+# 看不到「哪个参数错了、合法值是什么」，也就无法纠正自己的调用。`ToolError` 是 SDK 认可的
+# 「预期内失败」通道：`is_error=True` 且消息进 `content`。
+# 只翻译这些类型；其余异常继续上抛——那是 bug，应当在服务端日志里带栈回溯。
+_ANTICIPATED_FAILURES = (ConfigError, ProviderRequestError, FileNotFoundError, ValueError)
+
+
+def _actionable(fn):
+    """把预期内的失败翻译成 `ToolError`（理由见 `_ANTICIPATED_FAILURES` 上方注释）。"""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except _ANTICIPATED_FAILURES as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
+
+
+def _resolve_slice_start(start_time: Optional[str], total_sec: float) -> float:
+    """解析并校验切片起点；两条通道共用（第二阶段 B8）。
+
+    `parse_time_str` 自己对无法解析的格式抛错，这里补的是**越界**：起点已超过媒体总时长时
+    切片长度必然是 0，静默返回「成功 + `current_duration=00:00:00`」会让调用方以为这一段
+    听完了，实际一个字节都没听——本仓库最怕的失败模式。
+    """
+    if start_time is None:
+        return 0.0
+    parsed = MediaPreprocessor.parse_time_str(start_time)
+    if parsed is None:
+        return 0.0
+    start_sec = max(0.0, parsed)
+    if total_sec > 0 and start_sec >= total_sec:
+        raise ValueError(
+            f"start_time='{start_time}' 已超出媒体总时长 "
+            f"{MediaPreprocessor.format_time_str(total_sec)}：该区间没有任何音频。"
+        )
+    return start_sec
+
+
+def _resolve_slice_minutes(duration_minutes: Optional[float]) -> Optional[float]:
+    """校验 `duration_minutes`；返回 `None` 表示调用方未指定（各通道再取自己的默认值）。
+
+    注意 `0` **不算**「未指定」：ext 通道以前写的是 `duration_minutes or 配置默认值`，
+    于是显式传 0 会静默改用配置默认切片，与调用方要求不符（第二阶段 B8）。
+    """
+    if duration_minutes is None:
+        return None
+    if duration_minutes <= 0:
+        raise ValueError(f"duration_minutes 必须 > 0，收到 {duration_minutes}")
+    return float(duration_minutes)
 
 
 def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPServer:
@@ -73,6 +131,7 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
                 openWorldHint=False,
             )
         )
+        @_actionable
         async def read_audio(
             file_path: Annotated[str, Field(description="本地音频或视频文件的绝对路径")],
             start_time: Annotated[
@@ -98,19 +157,15 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
             meta = await asyncio.to_thread(MediaInspector.probe, path)
             total_sec = meta.duration_seconds
 
-            start_sec = 0.0
-            if start_time is not None:
-                parsed_start = MediaPreprocessor.parse_time_str(start_time)
-                if parsed_start is not None:
-                    start_sec = max(0.0, parsed_start)
+            start_sec = _resolve_slice_start(start_time, total_sec)
+            requested_min = _resolve_slice_minutes(duration_minutes)
 
-            if duration_minutes is not None:
-                if duration_minutes <= 0:
-                    raise ValueError(f"duration_minutes 必须 > 0，收到 {duration_minutes}")
-                budget_sec = duration_minutes * 60.0
+            if requested_min is not None:
+                budget_sec = requested_min * 60.0
             else:
                 rem_sec = max(0.0, total_sec - start_sec)
-                budget_sec = rem_sec if rem_sec <= 4500.0 else (DEFAULT_SAFE_SLICE_MINUTES * 60.0)
+                oneshot_sec = MAX_ONESHOT_MINUTES * 60.0
+                budget_sec = rem_sec if rem_sec <= oneshot_sec else (DEFAULT_SAFE_SLICE_MINUTES * 60.0)
 
             end_sec = min(total_sec, start_sec + budget_sec) if total_sec > 0 else start_sec + budget_sec
             slice_dur = max(0.0, end_sec - start_sec)
@@ -206,12 +261,17 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
     if mode in ("ext", "all"):
         @mcp.tool(
             annotations=ToolAnnotations(
-                readOnlyHint=True,
+                # readOnlyHint=False 是**如实**反映：传 `output_file` 时本工具会写盘
+                # （首卷原子覆写、续卷追加）。MCP 注解是静态的，做不到「按参数变化」，
+                # 所以只能取「可能会写」这个保守且真实的值（第二阶段 B4）。
+                # destructiveHint 仍为 False：写入是新增/追加，不销毁既有数据。
+                readOnlyHint=False,
                 destructiveHint=False,
                 idempotentHint=True,
                 openWorldHint=True,
             )
         )
+        @_actionable
         async def read_media(
             file_path: Annotated[str, Field(description="本地音频或视频文件的绝对路径")],
             prompt: Annotated[Optional[str], Field(description="给外部模型的专属指示或提示词（可选）")] = None,
@@ -250,13 +310,9 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
             meta = await asyncio.to_thread(MediaInspector.probe, path)
             total_sec = meta.duration_seconds
 
-            start_sec = 0.0
-            if start_time is not None:
-                parsed_start = MediaPreprocessor.parse_time_str(start_time)
-                if parsed_start is not None:
-                    start_sec = max(0.0, parsed_start)
-
-            dur_min = duration_minutes or cfg.defaults.slice_minutes
+            start_sec = _resolve_slice_start(start_time, total_sec)
+            requested_min = _resolve_slice_minutes(duration_minutes)
+            dur_min = requested_min if requested_min is not None else cfg.defaults.slice_minutes
             budget_sec = dur_min * 60.0
             end_sec = min(total_sec, start_sec + budget_sec) if total_sec > 0 else start_sec + budget_sec
             slice_dur = max(0.0, end_sec - start_sec)
@@ -352,14 +408,40 @@ def create_server(mode: str = "all", config_path: Optional[str] = None) -> MCPSe
     return mcp
 
 
-def main():
+def _serve(default_mode: str) -> None:
+    """按指定默认模式起 stdio 服务（`--mode` 仍可显式覆盖）。"""
     parser = argparse.ArgumentParser(description="OmniMedia Unified MCP Server")
-    parser.add_argument("--mode", choices=["all", "native", "ext"], default="all", help="Server mode (default: all)")
+    parser.add_argument(
+        "--mode",
+        choices=["all", "native", "ext"],
+        default=default_mode,
+        help=f"Server mode (default: {default_mode})",
+    )
     parser.add_argument("--config", help="Path to config.json for external endpoints")
     args = parser.parse_args()
 
     mcp = create_server(mode=args.mode, config_path=args.config)
     mcp.run(transport="stdio")
+
+
+def main() -> None:
+    """`omni-media-mcp` 入口：两类工具都注册（人工排查用；正常挂载请用下面两个专用入口）。"""
+    _serve("all")
+
+
+def main_native() -> None:
+    """`omni-media-mcp` 的正式用途：宿主自带音频模态时装这个（只暴露 `read_audio`，零凭证）。
+
+    与 `main_ext` 分成两个入口而不是共用一个 `mode=all`，是因为宿主是按**注册名**区分两条
+    听音通道的：注册名说「原生」，工具面就必须只有 `read_audio`。共用一个 all 模式会让
+    「装的是哪条通道」在工具列表上完全看不出来。
+    """
+    _serve("native")
+
+
+def main_ext() -> None:
+    """`omni-media-ext-mcp` 入口：宿主只有文本能力时装这个（只暴露 `read_media`，走外部模型）。"""
+    _serve("ext")
 
 
 if __name__ == "__main__":

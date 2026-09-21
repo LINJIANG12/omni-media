@@ -6,24 +6,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import re
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
-from omni_media_ext.config import Defaults, Endpoint
-from omni_media_ext.core.preprocessor import MediaPreprocessor
-from omni_media_ext.core.temp_manager import ManagedTempDir
-from omni_media_ext.providers.base import (
+from omni_media.config import Defaults, Endpoint
+from omni_media.core.preprocessor import MediaPreprocessor
+from omni_media.core.temp_manager import ManagedTempDir
+from omni_media.providers.base import (
     ProviderRequestError,
     build_multipart,
     ensure_payload_size,
     extract_text_content,
 )
-from omni_media_ext.providers.gemini import GeminiEndpoint, _guess_mime
-from omni_media_ext.providers.openai import OpenAIEndpoint
-from omni_media_ext.server import plan_slice
+from omni_media.providers.gemini import GeminiEndpoint, _guess_mime
+from omni_media.providers.openai import OpenAIEndpoint
+from omni_media.server import create_server
 from stub_endpoint import (
     GEMINI_GENERATE,
     MODELS,
@@ -31,6 +34,8 @@ from stub_endpoint import (
     OPENAI_TRANSCRIPTIONS,
     route_of,
 )
+
+_EXT_STATUS_RE = re.compile(r"<!-- OMNI_STATUS: (\{.*?\}) -->")
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +48,6 @@ def make_defaults(**overrides) -> Defaults:
         max_payload_mb=18,
         timeout_sec=30,
         max_retries=0,  # 测试里不重试，保持单次请求可断言
-        max_concurrency=2,
     )
     values.update(overrides)
     return Defaults(**values)
@@ -310,7 +314,7 @@ def test_openai_transcription_form_shape(audio_m4a: Path):
 
 def test_openai_transcription_falls_back_to_plain_json(audio_m4a: Path, monkeypatch):
     """端点不认 verbose_json（4xx）时必须退回 json 再试一次，而不是让整门课停在这里。"""
-    from omni_media_ext.providers import openai as openai_mod
+    from omni_media.providers import openai as openai_mod
 
     endpoint = openai_endpoint("https://example.invalid/v1", model="whisper-1", mode="transcriptions")
     bodies = []
@@ -334,7 +338,7 @@ def test_openai_transcription_falls_back_to_plain_json(audio_m4a: Path, monkeypa
 
 def test_openai_transcription_does_not_fallback_on_5xx_or_auth(audio_m4a: Path, monkeypatch):
     """5xx 与鉴权类 4xx 不是格式问题：只发一次请求、原样抛错，不做无谓的重传。"""
-    from omni_media_ext.providers import openai as openai_mod
+    from omni_media.providers import openai as openai_mod
 
     endpoint = openai_endpoint("https://example.invalid/v1", model="whisper-1", mode="transcriptions")
 
@@ -426,7 +430,7 @@ def test_openai_transcriptions_two_stage_for_summarize(stub, audio_m4a: Path):
 
 
 def test_openai_transcriptions_requires_text_model(stub, audio_m4a: Path):
-    from omni_media_ext.config import ConfigError
+    from omni_media.config import ConfigError
 
     endpoint = openai_endpoint(stub.base_openai, model="whisper-1", mode="transcriptions")
     with pytest.raises(ConfigError) as excinfo:
@@ -475,42 +479,79 @@ def test_ensure_payload_size_guard(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 切片规划
+# 切片规划（现由 `read_media` 内联完成）
 # ---------------------------------------------------------------------------
+# 统一包删掉了旧的 `plan_slice()` 纯函数（它返回 slice_seconds/has_next/clamped/... 那套字典）。
+# 分卷语义本身没变，只是搬进了 `read_media`，因此这里改成**穿过真实工具入口**断言行为，
+# 顺带把「配置里的 slice_minutes 真的被消费」这件事也钉住。
 
-def test_plan_slice_defaults_to_configured_minutes():
-    plan = plan_slice(3600.0, 0.0, None, 10.0, 18 * 1024 * 1024)
-    assert plan["slice_seconds"] == 600.0
-    assert plan["has_next"] is True
-    assert plan["clamped"] is False
-    assert plan["effective_minutes"] == 10.0
-
-
-def test_plan_slice_marks_last_chunk_as_finished():
-    plan = plan_slice(300.0, 0.0, 10.0, 10.0, 18 * 1024 * 1024)
-    assert plan["has_next"] is False
-    assert plan["end_sec"] == 300.0
+def _read_media(config_path: Path):
+    tools = create_server(mode="ext", config_path=str(config_path))._tool_manager._tools
+    assert "read_media" in tools
+    return tools["read_media"].fn
 
 
-def test_plan_slice_clamps_to_payload_budget():
-    # 4000 字节/秒 → 1MiB 只够 262 秒
-    plan = plan_slice(3600.0, 0.0, 60.0, 10.0, 1024 * 1024)
-    assert plan["clamped"] is True
-    assert plan["slice_seconds"] <= 1024 * 1024 / 4000 + 1
-    assert plan["requested_minutes"] == 60.0
+def _ext_status(text: str) -> dict:
+    match = _EXT_STATUS_RE.search(text)
+    assert match, text[:500]
+    return json.loads(match.group(1))
 
 
-def test_plan_slice_unknown_duration_has_no_pagination():
-    plan = plan_slice(0.0, 0.0, 5.0, 10.0, 18 * 1024 * 1024)
-    assert plan["duration_known"] is False
-    assert plan["has_next"] is False
-    assert plan["slice_seconds"] == 300.0
+def test_default_slice_comes_from_config(stub, audio_long_m4a: Path, ext_config: Path):
+    """不传 duration_minutes 时，切片长度必须取配置里的 slice_minutes（ext_config 给 1.0）。"""
+    out = asyncio.run(_read_media(ext_config)(file_path=str(audio_long_m4a)))
+    status = _ext_status(out)
+    assert status["is_finished"] is False
+    assert status["current_duration"] == "00:01:00"
+    assert status["next_start_time"] == "00:01:00"
+    assert status["next_duration_minutes"] == 1.0
 
 
-def test_plan_slice_midway_start_reports_next():
-    plan = plan_slice(1800.0, 600.0, 10.0, 10.0, 18 * 1024 * 1024)
-    assert plan["end_sec"] == 1200.0
-    assert plan["has_next"] is True
+def test_last_chunk_is_marked_finished(stub, audio_m4a: Path, ext_config: Path):
+    """预算覆盖整段时：is_finished=true，且不再给续读参数。"""
+    out = asyncio.run(
+        _read_media(ext_config)(file_path=str(audio_m4a), duration_minutes=10.0)
+    )
+    status = _ext_status(out)
+    assert status["is_finished"] is True
+    assert status["next_start_time"] is None
+    assert status["next_duration_minutes"] is None
+
+
+def test_midway_start_reports_next_window(stub, audio_long_m4a: Path, ext_config: Path):
+    out = asyncio.run(
+        _read_media(ext_config)(
+            file_path=str(audio_long_m4a),
+            start_time="00:00:30",
+            duration_minutes=0.5,
+        )
+    )
+    status = _ext_status(out)
+    assert status["current_start"] == "00:00:30"
+    assert status["is_finished"] is False
+    assert status["next_start_time"] == "00:01:00"
+
+
+def test_payload_budget_is_enforced_not_silently_clamped(
+    stub, audio_oversize_m4a: Path, make_ext_config
+):
+    """载荷超限时**报错**，而不是悄悄把切片截短。
+
+    旧实现（`plan_slice`）会把切片 clamp 到 `max_payload_mb` 以内并标 `clamped: true`；
+    统一包改成了显式守卫（`ensure_payload_size`）：超限直接给出可照做的错误，
+    避免「切片被静默缩短 ⇒ 音频没听完却看起来完成了」。
+
+    触发方式：预算取合法下界 1 MB（守卫线 ≈ 747 KiB），240 秒样本整段作为切片提交
+    （转 mp3 64k ≈ 1.9 MB），必然越线。
+    这里不再用 `max_payload_mb=0` 把预算退化成 1 字节——配置校验上线后 0 已不是合法值。
+    """
+    cfg = make_ext_config(max_payload_mb=1, name="tiny-budget.json")
+    # 第二阶段 B6 起，工具把预期内的失败翻成 `ToolError`，文案因此能过 MCP 边界。
+    with pytest.raises(ToolError) as excinfo:
+        asyncio.run(
+            _read_media(cfg)(file_path=str(audio_oversize_m4a), duration_minutes=4.0)
+        )
+    assert "duration_minutes" in str(excinfo.value)
 
 
 def test_json_status_payload_is_machine_readable(stub, audio_m4a: Path):

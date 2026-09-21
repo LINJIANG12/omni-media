@@ -5,41 +5,50 @@ from __future__ import annotations
 import copy
 import difflib
 import json
-import re
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from ..config import repo_root, strip_json_comments
 
-def strip_json_comments(text: str) -> str:
-    """Strips comments from JSONC text while preserving string literals."""
-    pattern = r'("(?:\\.|[^"\\])*")|(/\*[\s\S]*?\*/|//[^\r\n]*)'
+# 注册名 → 该注册必须使用的服务模式。
+#
+# 宿主是按**注册名**区分两条听音通道的，所以工具面必须跟着注册名走：原生入口只暴露
+# `read_audio`，外部模型入口只暴露 `read_media`。这里若不显式下发 `--mode`，两个入口都会
+# 退化成 `mode=all`——实际后果是「装了哪条通道」在工具列表上完全看不出来，两个启动器
+# 甚至是同一份字节。
+SERVER_MODES: Dict[str, str] = {
+    "omni-media": "native",
+    "omni-media-ext": "ext",
+}
+DEFAULT_SERVER_MODE = "all"
 
-    def replace(match):
-        if match.group(1):
-            return match.group(1)
-        return ""
 
-    return re.sub(pattern, replace, text)
+def mode_for_server(server_name: str) -> str:
+    """按注册名取服务模式；未登记的注册名退回 `all`（保持自定义注册名可用）。"""
+    return SERVER_MODES.get(str(server_name).strip(), DEFAULT_SERVER_MODE)
 
 
 def get_default_env_vars() -> Dict[str, str]:
     """Returns the environment needed by spawned MCP server."""
-    proj_root = str(Path(__file__).resolve().parent.parent.parent)
-    return {"PYTHONPATH": proj_root}
+    return {"PYTHONPATH": str(repo_root())}
 
 
 def build_stdio_entry(
     server_module: str = "omni_media.server",
     args: Optional[list[str]] = None,
     extra_env: Optional[Dict[str, str]] = None,
+    mode: str = DEFAULT_SERVER_MODE,
 ) -> Dict[str, Any]:
-    """Build canonical stdio entry used by adapters and print-config."""
+    """Build canonical stdio entry used by adapters and print-config.
+
+    `mode` 会作为 `--mode` 下发给服务进程，决定该注册暴露哪一类工具。
+    """
     env = get_default_env_vars()
     if extra_env:
         env.update(extra_env)
-    cmd_args = ["-m", server_module]
+    cmd_args = ["-m", server_module, "--mode", mode]
     if args:
         cmd_args.extend(args)
     return {
@@ -52,7 +61,7 @@ def build_stdio_entry(
 def build_generic_config(server_name: str = "omni-media", server_module: str = "omni_media.server") -> Dict[str, Any]:
     return {
         "mcpServers": {
-            server_name: build_stdio_entry(server_module),
+            server_name: build_stdio_entry(server_module, mode=mode_for_server(server_name)),
         }
     }
 
@@ -98,7 +107,7 @@ class BaseHostAdapter(ABC):
         path.write_text(content, encoding="utf-8")
 
     def build_entry(self) -> Dict[str, Any]:
-        return build_stdio_entry(self.server_module)
+        return build_stdio_entry(self.server_module, mode=mode_for_server(self.server_name))
 
     def is_registered(self) -> bool:
         data = self.read_config()
@@ -153,13 +162,6 @@ class BaseHostAdapter(ABC):
             )
         )
         return True, diff, new_data
-
-    def apply(self) -> Tuple[bool, str]:
-        has_change, diff, new_data = self.preview_apply()
-        if not has_change:
-            return True, "配置已是最新，无需修改。"
-        self.write_config(new_data)
-        return True, f"成功配置到 {self.display_name} ({self.get_config_path()})"
 
     def unapply(self) -> Tuple[bool, str]:
         if not self.is_registered():

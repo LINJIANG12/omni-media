@@ -70,7 +70,9 @@ def check_tools_and_modes():
     assert getattr(t_audio.annotations, "read_only_hint", None) is True
     assert getattr(t_audio.annotations, "open_world_hint", None) is False
 
-    assert getattr(t_media.annotations, "read_only_hint", None) is True
+    # read_media 的 readOnlyHint 必须是 False：传 `output_file` 时它会写盘，
+    # 注解要如实反映（MCP 注解是静态的，做不到按参数变化）。第二阶段 B4。
+    assert getattr(t_media.annotations, "read_only_hint", None) is False
     assert getattr(t_media.annotations, "open_world_hint", None) is True
     # Verify output_file parameter is present in read_media tool
     tool_props = getattr(t_media, "parameters", {}).get("properties", {})

@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .limits import AUDIO_EXTS, PROBE_TIMEOUT_SEC, VIDEO_EXTS
+from .limits import AUDIO_EXTS, MAX_ONESHOT_MINUTES, PROBE_TIMEOUT_SEC, VIDEO_EXTS
 from .proc import run_quiet
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,12 @@ class MediaMetadata:
                 )
 
         streams_str = "\n".join(streams_desc) if streams_desc else "- (无音视频轨道)"
-        oneshot_rec = "✅ 推荐整片直读 (≤75分钟)" if self.duration_seconds <= 4500 else "⚠️ 超过 75 分钟建议分卷切片"
+        oneshot_limit_sec = MAX_ONESHOT_MINUTES * 60.0
+        oneshot_limit_min = int(MAX_ONESHOT_MINUTES)
+        if self.duration_seconds <= oneshot_limit_sec:
+            oneshot_rec = f"✅ 推荐整片直读 (≤{oneshot_limit_min}分钟)"
+        else:
+            oneshot_rec = f"⚠️ 超过 {oneshot_limit_min} 分钟建议分卷切片"
 
         return f"""### 📊 媒体文件探测报告: `{self.file_name}`
 

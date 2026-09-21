@@ -42,7 +42,9 @@ def _server_params(config_path: Path) -> StdioServerParameters:
     }
     return StdioServerParameters(
         command=sys.executable,
-        args=["-m", "omni_media_ext.server", "--config", str(config_path)],
+        # `--mode ext` 必须显式下发：不写就是 all 模式，工具面会多出 read_audio，
+        # 「挂的是哪条通道」在工具列表上就看不出来了。
+        args=["-m", "omni_media.server", "--mode", "ext", "--config", str(config_path)],
         cwd=str(REPO_ROOT),
         env=env,
     )
@@ -118,7 +120,8 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
     async with stdio_client(_server_params(e2e_config)) as (read, write):
         async with ClientSession(read, write) as session:
             init = await session.initialize()
-            assert init.server_info.name == "OmniMedia-Ext-Server"
+            # 统一包只有一个 server 实例名（通道靠注册名与 --mode 区分，不靠实例名）
+            assert init.server_info.name == "OmniMedia-Server"
 
             # ---- 1. 工具面：恰好两个工具，且绝不出现 read_audio ----
             tools = await session.list_tools()
@@ -128,12 +131,17 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
 
             read_tool = next(t for t in tools.tools if t.name == "read_media")
             schema = getattr(read_tool, "input_schema", None) or read_tool.inputSchema  # 兼容两种字段名
+            # 旧的 `instruction` 已更名为 `prompt`，并新增 `output_file`（直写落盘，防上下文爆炸）；
+            # `ctx` 是 context_kwarg，不出现在 schema 里。
             assert set(schema["properties"]) == {
-                "file_path", "mode", "instruction", "endpoint", "start_time", "duration_minutes"
+                "file_path", "prompt", "mode", "endpoint", "start_time",
+                "duration_minutes", "output_file",
             }
             assert schema["required"] == ["file_path"]
             assert read_tool.annotations is not None
-            assert read_tool.annotations.read_only_hint is True
+            # readOnlyHint=False 是 B4 的修复：传 `output_file` 时本工具会写盘，
+            # 注解必须如实反映（MCP 注解是静态的，做不到按参数变化）。
+            assert read_tool.annotations.read_only_hint is False
             assert read_tool.annotations.destructive_hint is False
             assert read_tool.annotations.idempotent_hint is True
             assert read_tool.annotations.open_world_hint is True
@@ -145,17 +153,13 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
             assert inspect_tool.annotations.idempotent_hint is True
             assert inspect_tool.annotations.open_world_hint is False
 
-            # ---- 2. 资源：脱敏端点清单 ----
+            # ---- 2. 资源 ----
+            # 旧的 `media://endpoints` 资源在当前实现里不存在（`HEAD` 版也没有），
+            # 服务端注册的资源集为空。脱敏行为已由 `test_config.py`
+            # （to_public_dict 不泄漏完整 key）与 `test_cli_ext.py`
+            # （`config show` 打码）覆盖，这里只钉住「没有意外新增资源」。
             resources = await session.list_resources()
-            uris = {str(r.uri) for r in resources.resources}
-            assert "media://endpoints" in uris
-            resource = await session.read_resource("media://endpoints")
-            payload = json.loads(resource.contents[0].text)
-            assert payload["active"] == "gem"
-            assert set(payload["endpoints"]) == {"gem", "oai", "whisper"}
-            dumped = json.dumps(payload, ensure_ascii=False)
-            assert "e2e-gemini-key-1234567890" not in dumped
-            assert "e2e-...7890" in dumped  # 前4 + ... + 后4
+            assert {str(r.uri) for r in resources.resources} == set()
 
             # ---- 3. inspect_media（纯本地，不需要端点）----
             inspect_result = await session.call_tool("inspect_media", {"file_path": str(audio_m4a)})
@@ -174,21 +178,22 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
             status = _status_of(gem_text)
             assert status["endpoint"] == "gem" and status["protocol"] == "gemini"
             assert status["model"] == "gemini-e2e"
-            assert status["is_finished"] is True and status["status"] == "COMPLETED"
-            assert status["total_duration"].startswith("00:00:0")
-            assert status["clamped"] is False
-            # 与原生听音版共享的契约：mode 是**切片模式**，任务预设放在 task 里
-            assert status["mode"] == "oneshot", status["mode"]
-            assert status["task"] == "transcribe", status["task"]
-            assert status["channel"] == "external-model"
-            assert "全篇音频已处理完毕" in gem_text
+            assert status["is_finished"] is True
+            # 状态字段是**结构化**的：时长给秒数，不给格式化字符串；也不再有
+            # `status`/`clamped`/`mode`/`task`/`channel` 这套旧字段——
+            # 分卷语义只由 is_finished + next_start_time/next_duration_minutes 表达。
+            assert status["duration_seconds"] == pytest.approx(3.0, abs=0.5)
+            assert status["current_start"] == "00:00:00"
+            assert status["next_start_time"] is None
+            # 读完了就不该再出现续读提示（提示只在未读完时追加）
+            assert "分卷续读提示" not in gem_text
             assert len(stub.requests_for(GEMINI_GENERATE)) == 1
 
             # ---- 5. read_media：OpenAI chat 协议（显式切换端点）----
             stub.reset_requests()
             oai = await session.call_tool(
                 "read_media",
-                {"file_path": str(audio_m4a), "mode": "qa", "instruction": "这一讲讲了什么？", "endpoint": "oai"},
+                {"file_path": str(audio_m4a), "mode": "qa", "prompt": "这一讲讲了什么？", "endpoint": "oai"},
             )
             assert not _is_error(oai), _text(oai)
             oai_text = _text(oai)
@@ -197,7 +202,7 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
             chat_requests = stub.requests_for(OPENAI_CHAT)
             assert len(chat_requests) == 1
             assert chat_requests[0].json()["messages"][0]["content"][1]["type"] == "input_audio"
-            # 用户 instruction 必须真的被拼进提示词
+            # 用户 prompt 必须真的被拼进提示词
             assert "这一讲讲了什么？" in chat_requests[0].json()["messages"][0]["content"][0]["text"]
 
             # ---- 6. read_media：transcriptions 两段式（summarize）----
@@ -211,10 +216,11 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
             routes = [r.route for r in stub.requests]
             assert routes == [OPENAI_TRANSCRIPTIONS, OPENAI_CHAT], routes
 
-            # 返回的是**第二段**（总结）的结果，模型名也应是 text_model
+            # 返回的是**第二段**（总结）的结果
             assert "STUB-OPENAI-CHAT" in whisper_text
-            status = _status_of(whisper_text)
-            assert status["model"] == "gpt-4o-mini"
+            # status 里的 model 报的是端点配置的模型；第二段实际用的 text_model 看请求体
+            assert _status_of(whisper_text)["model"] == "whisper-1"
+            assert stub.requests_for(OPENAI_CHAT)[0].json()["model"] == "gpt-4o-mini"
 
             # 但第一段产出的逐字稿必须真的被带进第二段的提示词里
             second_prompt = stub.requests_for(OPENAI_CHAT)[0].json()["messages"][0]["content"]
@@ -225,6 +231,7 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
             # ---- 7. 分页串联：130 秒媒体 + 60 秒预算 = 3 片 ----
             stub.reset_requests()
             seen_starts: List[str] = []
+            budgets: List[float] = []
             start: str | None = None
             for _ in range(5):  # 上限 5 次，够读完 3 片
                 arguments: Dict[str, Any] = {"file_path": str(audio_long_m4a), "mode": "transcribe"}
@@ -234,42 +241,134 @@ async def _full_surface(e2e_config: Path, audio_m4a: Path, audio_long_m4a: Path,
                 assert not _is_error(page), _text(page)
                 page_text = _text(page)
                 page_status = _status_of(page_text)
-                seen_starts.append(page_status["start_time"])
+                seen_starts.append(page_status["current_start"])
                 if page_status["is_finished"]:
                     break
                 start = page_status["next_start_time"]
-                assert "续读下一分卷参数" in page_text
-                assert page_status["next_duration_minutes"] == 1.0
+                assert "分卷续读提示" in page_text
+                # 下一卷预算 = min(剩余时长, 配置的 slice_minutes=1.0)：
+                # 还没到尾部就是满额，最后一卷只剩零头，所以这里只断言上界与正数。
+                assert 0 < page_status["next_duration_minutes"] <= 1.0
+                budgets.append(page_status["next_duration_minutes"])
             else:
                 pytest.fail("分页循环没有在 5 次内结束")
 
             assert seen_starts == ["00:00:00", "00:01:00", "00:02:00"], seen_starts
+            # 下一卷预算 = min(剩余时长, 配置的 slice_minutes=1.0)，是**预告**下一卷能读多久：
+            # 第 1 卷之后还剩 70 秒 => 满额 1.0；第 2 卷之后只剩 10 秒 => 0.17。
+            assert budgets[0] == 1.0, budgets
+            assert budgets[1] == pytest.approx(0.17, abs=0.02), budgets
             assert len(stub.requests_for(GEMINI_GENERATE)) == 3
 
-            # 多卷时的契约：mode 必须是 chunked，且续读字段齐备
+            # 多卷时的契约：续读字段齐备
+            # （ext 通道的状态里没有 `mode`/`channel` 标记——分卷与否由 is_finished
+            #   与 next_start_time 表达；旧的 `mode == "chunked"` 是原生通道的字段）
             paged = await session.call_tool(
                 "read_media", {"file_path": str(audio_long_m4a), "mode": "transcribe", "duration_minutes": 1}
             )
             paged_status = _status_of(_text(paged))
-            assert paged_status["mode"] == "chunked"
             assert paged_status["is_finished"] is False
             assert paged_status["next_start_time"] == "00:01:00"
+            assert paged_status["next_duration_minutes"] == 1.0
 
-            # ---- 8. 非法入参必须是 isError，而不是空串或静默成功 ----
+            # ---- 8. 非法入参必须是 isError，并带上可操作的原因 ----
+            #
+            # 第二阶段 B6 修好之后，工具把预期内的失败翻成 `ToolError`，SDK 会保留正文
+            # （前缀 `Error executing tool read_media:` 是 SDK 自己加的）。所以这里可以
+            # 连 needle 一起断言了——文案真的到得了调用方。
             cases = [
-                ({"file_path": str(audio_m4a), "mode": "telepathy"}, "不支持的 mode"),
-                ({"file_path": str(audio_m4a), "mode": "custom"}, "custom"),
+                ({"file_path": str(audio_m4a), "mode": "telepathy"}, "无效的 mode"),
                 ({"file_path": str(audio_m4a), "endpoint": "ghost"}, "未知端点"),
-                ({"file_path": str(audio_m4a), "duration_minutes": 0}, "必须大于 0"),
-                ({"file_path": str(audio_m4a), "duration_minutes": -1}, "必须大于 0"),
-                ({"file_path": str(audio_m4a), "start_time": "99:00:00"}, "超出媒体时长"),
-                ({"file_path": str(audio_m4a.parent / "nope.m4a")}, "不存在"),
-                ({"file_path": str(Path(__file__))}, "不支持的文件扩展名"),
+                ({"file_path": str(audio_m4a.parent / "nope.m4a")}, "文件不存在"),
+                ({"file_path": str(Path(__file__))}, "不支持的媒体格式"),
+                ({"file_path": str(audio_m4a), "mode": "custom"}, "prompt"),
+                ({"file_path": str(audio_m4a), "duration_minutes": -1}, "必须 > 0"),
+                ({"file_path": str(audio_m4a), "duration_minutes": 0}, "必须 > 0"),
+                ({"file_path": str(audio_m4a), "start_time": "99:00:00"}, "超出媒体总时长"),
             ]
             for arguments, needle in cases:
                 failed = await session.call_tool("read_media", arguments)
                 assert _is_error(failed), f"这批入参本应报错: {arguments}"
-                assert needle in _text(failed), (arguments, _text(failed)[:300])
+                assert needle in _text(failed), f"{arguments} 的报错缺少原因「{needle}」: {_text(failed)}"
+
+
+# ---------------------------------------------------------------------------
+# 第二阶段已关闭的缺口：B7（custom 空提示词）/ B8（ext 空切片）
+# ---------------------------------------------------------------------------
+
+def test_ext_channel_rejects_degenerate_slice_arguments(tmp_path: Path, stub, audio_m4a: Path):
+    """B8（已修）：ext 通道与原生通道用**同一套**切片参数校验。
+
+    以前 ext 写的是 `duration_minutes or 配置默认值`，于是 `-1` 算出 0 秒切片、越界
+    `start_time` 落到文件之外，两种都**返回成功**且 `current_duration=00:00:00`——
+    调用方会以为这一段听完了，实际一个字节都没听。技能侧的续读循环只看 `is_finished`，
+    会直接跳到下一卷，于是整段内容被静默跳过。
+    """
+    asyncio.run(_degenerate_slice(tmp_path, stub, audio_m4a))
+
+
+async def _degenerate_slice(tmp_path: Path, stub, audio_m4a: Path) -> None:
+    config = _write_config(tmp_path / "config.json", stub)
+    async with stdio_client(_server_params(config)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            for label, extra in (
+                ("duration_minutes=-1", {"duration_minutes": -1}),
+                ("duration_minutes=0", {"duration_minutes": 0}),
+                ("start_time=99:00:00", {"start_time": "99:00:00"}),
+            ):
+                result = await session.call_tool(
+                    "read_media", {"file_path": str(audio_m4a), **extra}
+                )
+                assert _is_error(result), f"{label} 应当报错，而不是返回零长度切片"
+                assert "OMNI_STATUS" not in _text(result), f"{label} 报错时不该带状态注释"
+
+            # 校验必须发生在出网之前：一个请求都不能发出去
+            assert stub.requests_for(GEMINI_GENERATE) == []
+
+
+def test_custom_mode_without_prompt_is_rejected(tmp_path: Path, stub, audio_m4a: Path):
+    """B7（已修）：`mode="custom"` 缺 `prompt` 直接拒绝，不再把空提示词发给模型。
+
+    `custom` 的存在意义就是用户自带提示词；缺了它等于没有任务，发出去只会让模型
+    自行发挥——结果不可预期且要花钱。
+    """
+    asyncio.run(_custom_without_prompt(tmp_path, stub, audio_m4a))
+
+
+async def _custom_without_prompt(tmp_path: Path, stub, audio_m4a: Path) -> None:
+    config = _write_config(tmp_path / "config.json", stub)
+    async with stdio_client(_server_params(config)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "read_media", {"file_path": str(audio_m4a), "mode": "custom"}
+            )
+            assert _is_error(result), "custom 缺 prompt 必须报错"
+            assert "prompt" in _text(result)
+            # 拒绝必须发生在出网之前
+            assert stub.requests_for(GEMINI_GENERATE) == []
+
+
+def test_custom_mode_with_prompt_still_works(tmp_path: Path, stub, audio_m4a: Path):
+    """B7 的反面：带上 `prompt` 的 custom 必须照常工作（别修成一律拒绝）。"""
+    asyncio.run(_custom_with_prompt(tmp_path, stub, audio_m4a))
+
+
+async def _custom_with_prompt(tmp_path: Path, stub, audio_m4a: Path) -> None:
+    config = _write_config(tmp_path / "config.json", stub)
+    async with stdio_client(_server_params(config)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "read_media",
+                {"file_path": str(audio_m4a), "mode": "custom", "prompt": "只输出时间轴"},
+            )
+            assert not _is_error(result), _text(result)
+            sent = stub.requests_for(GEMINI_GENERATE)
+            assert len(sent) == 1
+            assert "只输出时间轴" in sent[0].body.decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +391,10 @@ async def _broken_config(missing: Path, audio_m4a: Path) -> None:
 
             read_result = await session.call_tool("read_media", {"file_path": str(audio_m4a)})
             assert _is_error(read_result)
-            assert "--config 指定的配置文件不存在" in _text(read_result)
-
-            resource = await session.read_resource("media://endpoints")
-            assert "配置不可用" in resource.contents[0].text
+            # B6 修好后，具体文案（"未找到配置文件 / --config 指定的配置文件不存在"）
+            # 能过 MCP 错误边界了，这里连原因一起断言。
+            assert "read_media" in _text(read_result)
+            assert "不存在" in _text(read_result)
 
 
 def test_endpoint_without_key_errors_before_network(tmp_path: Path, stub, audio_m4a: Path):
@@ -328,7 +427,10 @@ async def _no_key(config: Path, stub, audio_m4a: Path) -> None:
             await session.initialize()
             result = await session.call_tool("read_media", {"file_path": str(audio_m4a)})
             assert _is_error(result)
-            assert "未配置 api_key" in _text(result) or "REPLACE_ME" in _text(result)
+            # B6 修好后原因也能读到了；本用例真正要守的还有下一行——
+            # 「在发请求之前就失败」，也就是一个请求都不能发出去。
+            assert "api_key" in _text(result)
+            assert "read_media" in _text(result)
 
     # 关键：一个请求都不应该发出去
     assert stub.requests == []

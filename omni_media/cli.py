@@ -6,11 +6,19 @@ import argparse
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
+from typing import Optional
 
 from .adapters.base import build_generic_config
 from .adapters.registry import get_adapter, get_all_adapters, list_supported_targets
-from .config import ConfigError, default_config_path, find_config_file, load_config
+from .config import (
+    ConfigError,
+    default_config_path,
+    example_config_path,
+    find_config_file,
+    load_config,
+)
 from .core.inspector import MediaInspector
 from .server import create_server
 
@@ -80,7 +88,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
     server_name = getattr(args, "server_name", "omni-media")
     targets = list_supported_targets() if args.target == "all" else [args.target]
     for t in targets:
-        adp = get_adapter(t, custom_config_path=args.config_path, server_name=server_name)
+        try:
+            adp = get_adapter(t, custom_config_path=args.config_path, server_name=server_name)
+        except ValueError as e:
+            # 打错一个宿主名不该看到栈回溯。`get_adapter` 的消息本身已经列出了合法取值。
+            print(str(e), file=sys.stderr)
+            return 1
         has_change, diff, new_data = adp.preview_apply()
         if not has_change:
             print(f"[*] {adp.display_name}: 配置已是最新，无需修改。")
@@ -101,7 +114,11 @@ def cmd_unapply(args: argparse.Namespace) -> int:
     server_name = getattr(args, "server_name", "omni-media")
     targets = list_supported_targets() if args.target == "all" else [args.target]
     for t in targets:
-        adp = get_adapter(t, custom_config_path=args.config_path, server_name=server_name)
+        try:
+            adp = get_adapter(t, custom_config_path=args.config_path, server_name=server_name)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 1
         success, msg = adp.unapply()
         print(f"[*] {adp.display_name}: {msg}")
     return 0
@@ -119,31 +136,24 @@ def cmd_config(args: argparse.Namespace) -> int:
         if target.exists() and not args.force:
             print(f"配置文件已存在: {target}（加 --force 可覆盖）")
             return 1
-        template = {
-            "active": "gemini",
-            "defaults": {
-                "slice_minutes": 10.0,
-                "max_concurrency": 3,
-            },
-            "endpoints": {
-                "gemini": {
-                    "protocol": "gemini",
-                    "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                    "model": "gemini-2.5-flash",
-                    "api_key": "YOUR_GEMINI_API_KEY",
-                },
-                "openai": {
-                    "protocol": "openai",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "gpt-4o-audio-preview",
-                    "api_key": "YOUR_OPENAI_API_KEY",
-                    "openai_mode": "chat",
-                }
-            }
-        }
+        template_path = example_config_path()
+        if not template_path.is_file():
+            print(f"模板文件缺失: {template_path}", file=sys.stderr)
+            return 1
+        if target.exists():
+            # 覆盖前先备份：这份配置可能带着真实 `api_key`，而 `--force` 是**就地覆盖**。
+            # 实测已造成一次事故（2026-09 覆盖了容器根的活配置，只能靠手工留存的副本恢复），
+            # 所以强制留一份可回滚的副本（第二阶段 A11）。备份名已进 .gitignore——
+            # 它同样含明文密钥，绝不能进版本库。
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            backup = target.with_name(f"{target.name}.bak.{stamp}")
+            shutil.copy2(target, backup)
+            print(f"[*] 已备份原配置: {backup}")
+        body = template_path.read_text(encoding="utf-8").rstrip("\n")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(template, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        target.write_text(body + "\n", encoding="utf-8")
         print(f"[PASS] 模板已生成至: {target}")
+        print(f"       模板来源: {template_path}")
     elif args.action == "show":
         try:
             cfg = load_config(args.config)
@@ -203,26 +213,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def _run(argv: Optional[list[str]], server_name: str) -> int:
+    """解析并派发一次 CLI 调用，返回退出码（由 setuptools 生成的启动器 `sys.exit(main())` 消费）。
+
+    两个入口只差「注册名」这一个值：宿主按注册名区分两条听音通道，所以
+    `omni-media` 与 `omni-media-ext` 必须报告各自的名字。
+    """
     parser = build_parser()
-    args = parser.parse_args()
+    parser.set_defaults(server_name=server_name)
+    args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         parser.print_help()
-        sys.exit(0)
-    sys.exit(args.func(args))
+        return 0
+    return int(args.func(args) or 0)
 
 
-def main_ext():
-    """CLI entrypoint alias for omni-media-ext compatibility."""
-    parser = build_parser()
-    # default server_name to omni-media-ext
-    parser.set_defaults(server_name="omni-media-ext")
-    args = parser.parse_args()
-    if not hasattr(args, "func"):
-        parser.print_help()
-        sys.exit(0)
-    sys.exit(args.func(args))
+def main(argv: Optional[list[str]] = None) -> int:
+    """`omni-media` 入口（注册名 omni-media）。"""
+    return _run(argv, "omni-media")
+
+
+def main_ext(argv: Optional[list[str]] = None) -> int:
+    """`omni-media-ext` 入口（注册名 omni-media-ext）。"""
+    return _run(argv, "omni-media-ext")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
