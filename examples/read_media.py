@@ -44,7 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--prompt", "-p", default=None, help="自定义提示词（custom 必填）")
     parser.add_argument("--start", default=None, help="起始时间戳，如 00:00:00")
-    parser.add_argument("--duration", "-d", type=float, default=1.0, help="本次切片分钟数（默认 1，省时省钱）")
+    parser.add_argument("--duration", "-d", type=float, default=None, help="本次切片分钟数（缺省走配置 slice_minutes，通常 30）")
+    parser.add_argument("--output-file", "-o", default=None, help="转录产物直写落盘路径（绝对路径或相对路径）")
+    parser.add_argument("--full", action="store_true", help="自动分卷续读直到整段媒体听完 (is_finished=True)")
     parser.add_argument("--skip-inspect", action="store_true", help="跳过 inspect_media")
     return parser
 
@@ -104,8 +106,11 @@ async def main() -> int:
             arguments: dict = {
                 "file_path": str(media),
                 "mode": args.mode,
-                "duration_minutes": args.duration,
             }
+            if args.duration is not None:
+                arguments["duration_minutes"] = args.duration
+            if args.output_file:
+                arguments["output_file"] = str(Path(args.output_file).expanduser().resolve())
             if args.endpoint:
                 arguments["endpoint"] = args.endpoint
             if args.prompt:
@@ -113,23 +118,43 @@ async def main() -> int:
             if args.start:
                 arguments["start_time"] = args.start
 
-            result = await session.call_tool("read_media", arguments)
-            text = "\n".join(
-                getattr(block, "text", "") for block in result.content if getattr(block, "text", None)
-            )
+            iteration = 1
+            while True:
+                if iteration > 1:
+                    print(f"\n--- [分卷续读] 轮次 {iteration}: start_time={arguments.get('start_time')}, duration={arguments.get('duration_minutes')} ---")
+                result = await session.call_tool("read_media", arguments)
+                text = "\n".join(
+                    getattr(block, "text", "") for block in result.content if getattr(block, "text", None)
+                )
 
-            if getattr(result, "isError", None) or getattr(result, "is_error", False):
-                print("[工具返回错误]")
-                print(text)
-                return 1
+                if getattr(result, "isError", None) or getattr(result, "is_error", False):
+                    print("[工具返回错误]")
+                    print(text)
+                    return 1
 
-            status_match = _STATUS_RE.search(text)
-            if status_match:
-                print("状态注释:")
-                print(json.dumps(json.loads(status_match.group(1)), ensure_ascii=False, indent=2))
-            print("\n模型返回正文:")
-            body = _STATUS_RE.sub("", text).strip()
-            print(body)
+                status_match = _STATUS_RE.search(text)
+                status = json.loads(status_match.group(1)) if status_match else {}
+                if status:
+                    print("状态注释:")
+                    print(json.dumps(status, ensure_ascii=False, indent=2))
+
+                body = _STATUS_RE.sub("", text).strip()
+                if not args.output_file:
+                    print("\n模型返回正文:")
+                    print(body)
+                else:
+                    print(body)
+
+                if not args.full or status.get("is_finished", True):
+                    break
+
+                next_start = status.get("next_start_time")
+                if not next_start:
+                    break
+                arguments["start_time"] = next_start
+                if status.get("next_duration_minutes") is not None:
+                    arguments["duration_minutes"] = status.get("next_duration_minutes")
+                iteration += 1
 
     print("\n*** 真端点端到端调用成功 ***")
     return 0
