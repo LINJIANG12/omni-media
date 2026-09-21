@@ -51,6 +51,15 @@ class OpenCodeAdapter(BaseHostAdapter):
 class ZCodeAdapter(BaseHostAdapter):
     target_id = "zcode"
     display_name = "ZCode Studio"
+    servers_path = ("mcp", "servers")
+
+    # 一次 30 分钟切片的转录（尤其 ext 通道要调外部模型）远超 ZCode 默认的 30000ms，
+    # 用默认值会在转录中途被判超时——这项必须显式下发，不是可选的美化字段。
+    TIMEOUT_MS = 300000
+
+    def build_entry(self) -> Dict[str, Any]:
+        # `type` 在 ZCode 里可省略（由 `command` 推断），写上只是对齐它的规范示例。
+        return {**super().build_entry(), "type": "stdio", "timeoutMs": self.TIMEOUT_MS}
 
     def get_config_path(self) -> Path:
         if self.custom_path:

@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Optional
 
 import pytest
 
-from omni_media.adapters.registry import get_adapter
+from omni_media.adapters.registry import ZCodeAdapter, get_adapter
 from omni_media.server import create_server
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -143,3 +143,41 @@ def test_both_registration_names_coexist_in_one_host_config(target: str):
     # 重复挂载必须幂等：再挂一次不改变结果
     again = get_adapter(target, server_name="omni-media-ext").build_applied_config(merged)
     assert _entries(again) == entries
+
+
+def test_zcode_entry_lands_under_nested_mcp_servers(tmp_path: Path):
+    """ZCode 用户配置的服务器容器是 `mcp.servers`，不是顶层 `mcpServers`。
+
+    写错层级 ZCode 一个条目都读不到（它把顶层 `mcpServers` 认作 `.agents/mcp.json`
+    那份兜底文件的形状），而 `apply` 依然打印成功——所以层级本身要有断言钉住。
+    """
+    host_config = tmp_path / "config.json"
+    host_config.write_text(json.dumps({"plugins": {"enabledPlugins": {}}}), encoding="utf-8")
+
+    adapter = get_adapter("zcode", custom_config_path=host_config, server_name="omni-media")
+    assert adapter.is_registered() is False
+    adapter.write_config(adapter.build_applied_config(adapter.read_config()))
+
+    written = json.loads(host_config.read_text(encoding="utf-8"))
+    assert "mcpServers" not in written, "顶层 mcpServers 对 ZCode 无效，必须写进 mcp.servers"
+    entry = written["mcp"]["servers"]["omni-media"]
+    assert entry["args"][-1] == "native"
+    assert entry["type"] == "stdio"
+    # 默认 30s 撑不过一次切片转录，超时必须显式下发
+    assert entry["timeoutMs"] == ZCodeAdapter.TIMEOUT_MS > 30000
+    assert written["plugins"] == {"enabledPlugins": {}}, "无关字段必须原样保留"
+    assert adapter.is_registered() is True
+
+    adapter.write_config(adapter.build_unapplied_config(adapter.read_config()))
+    assert get_adapter("zcode", custom_config_path=host_config).is_registered() is False
+
+
+def test_other_hosts_keep_top_level_mcp_servers(tmp_path: Path):
+    """层级是宿主私有属性：除 ZCode 外的宿主仍写顶层 `mcpServers`。"""
+    for target in ("codex", "dsh", "opencode", "antigravity"):
+        host_config = tmp_path / f"{target}.json"
+        adapter = get_adapter(target, custom_config_path=host_config)
+        merged = adapter.build_applied_config({})
+        assert "mcpServers" in merged, target
+        adapter.write_config(merged)
+        assert adapter.is_registered() is True, target

@@ -72,6 +72,25 @@ class BaseHostAdapter(ABC):
     target_id: str = "base"
     display_name: str = "Base Host"
 
+    # 服务器条目在宿主配置里的容器路径。多数宿主是顶层 `mcpServers`；ZCode 在
+    # `~/.zcode/cli/config.json` 里用嵌套的 `mcp.servers`（顶层 `mcpServers` 是它认的
+    # `.agents/mcp.json` 兼容兜底的形状）。写错层级不报错、`apply` 照旧打印成功，只是宿主
+    # 一个条目也读不到——所以这里按宿主分开，而不是所有宿主共用一条路径。
+    servers_path: Tuple[str, ...] = ("mcpServers",)
+
+    def _servers_container(self, data: Dict[str, Any], create: bool) -> Optional[Dict[str, Any]]:
+        """返回服务器条目所在的字典；`create=True` 时按 `servers_path` 补齐缺失层级。"""
+        node = data
+        for key in self.servers_path:
+            child = node.get(key)
+            if not isinstance(child, dict):
+                if not create:
+                    return None
+                child = {}
+                node[key] = child
+            node = child
+        return node
+
     def __init__(
         self,
         custom_config_path: Optional[str | Path] = None,
@@ -111,20 +130,19 @@ class BaseHostAdapter(ABC):
 
     def is_registered(self) -> bool:
         data = self.read_config()
-        servers = data.get("mcpServers", {})
+        servers = self._servers_container(data, create=False)
         return isinstance(servers, dict) and self.server_name in servers
 
     def build_applied_config(self, current_data: Dict[str, Any]) -> Dict[str, Any]:
         data = copy.deepcopy(current_data)
-        if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
-            data["mcpServers"] = {}
-        data["mcpServers"][self.server_name] = self.build_entry()
+        self._servers_container(data, create=True)[self.server_name] = self.build_entry()
         return data
 
     def build_unapplied_config(self, current_data: Dict[str, Any]) -> Dict[str, Any]:
         data = copy.deepcopy(current_data)
-        if "mcpServers" in data and isinstance(data["mcpServers"], dict) and self.server_name in data["mcpServers"]:
-            del data["mcpServers"][self.server_name]
+        servers = self._servers_container(data, create=False)
+        if isinstance(servers, dict) and self.server_name in servers:
+            del servers[self.server_name]
         return data
 
     def preview_apply(self) -> Tuple[bool, str, Dict[str, Any]]:
