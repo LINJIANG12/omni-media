@@ -180,7 +180,7 @@ class OpenAIEndpoint(BaseEndpoint):
     _ASR_FORMATS = ("verbose_json", "json")
 
     def build_transcription_form(
-        self, target: Path, response_format: str = "verbose_json"
+        self, target: Path, response_format: str = "verbose_json", prompt: Optional[str] = None
     ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, str, bytes]], str]:
         """构造 multipart 字段/文件与 mime（独立成方法，便于单测断言）。"""
         mime, _ = mimetypes.guess_type(target.name)
@@ -193,6 +193,8 @@ class OpenAIEndpoint(BaseEndpoint):
         ]
         if self.endpoint.language:
             fields.append(("language", self.endpoint.language))
+        if prompt:
+            fields.append(("prompt", prompt))
 
         files = [("file", target.name, mime, target.read_bytes())]
         return fields, files, mime
@@ -225,7 +227,7 @@ class OpenAIEndpoint(BaseEndpoint):
     # 文件原样再传一遍，最后报错还指向第二次尝试，把真正的病因藏起来。
     NO_FALLBACK_STATUS = frozenset({401, 403, 413})
 
-    def _request_transcript(self, target: Path) -> str:
+    def _request_transcript(self, target: Path, prompt: Optional[str] = None) -> str:
         """发一次 `/audio/transcriptions` 并取回文本；格式按 `_ASR_FORMATS` 依次尝试。
 
         上游鉴权/配额失败时，把「去查 /audio/transcriptions 配置」这条会**把人带偏**的
@@ -233,17 +235,17 @@ class OpenAIEndpoint(BaseEndpoint):
         """
         for response_format in self._ASR_FORMATS[:-1]:
             try:
-                return self._post_transcription(target, response_format)
+                return self._post_transcription(target, response_format, prompt=prompt)
             except ProviderRequestError as exc:
                 # 4xx = 本次请求（多半是 response_format）不被端点接受 → 换下一种格式再试；
                 # 5xx / 无状态码 / 鉴权与体积类 4xx 是端点侧或配置侧故障，换格式没有意义，直接抛出。
                 if not exc.status or exc.status >= 500 or exc.status in self.NO_FALLBACK_STATUS:
                     raise
-        return self._post_transcription(target, self._ASR_FORMATS[-1])
+        return self._post_transcription(target, self._ASR_FORMATS[-1], prompt=prompt)
 
-    def _post_transcription(self, target: Path, response_format: str) -> str:
+    def _post_transcription(self, target: Path, response_format: str, prompt: Optional[str] = None) -> str:
         """按指定 `response_format` 发一次转录请求并把响应体解析成文本。"""
-        fields, files, _ = self.build_transcription_form(target, response_format)
+        fields, files, _ = self.build_transcription_form(target, response_format, prompt=prompt)
         body, content_type = build_multipart(fields, files)
 
         headers = self._headers(json_body=False)
@@ -269,10 +271,10 @@ class OpenAIEndpoint(BaseEndpoint):
             ) from exc
         return self._extract_transcript(status, raw)
 
-    def _transcribe(self, target: Path) -> str:
+    def _transcribe(self, target: Path, prompt: Optional[str] = None) -> str:
         """从端点获取音频逐字稿。"""
         ensure_payload_size(target, self.payload_budget_bytes())
-        return self._request_transcript(target)
+        return self._request_transcript(target, prompt=prompt)
 
     def _reason_over_transcript(self, prompt: str, transcript: str) -> Tuple[str, str]:
         """第二段：把逐字稿交给文本模型做总结/问答。"""
@@ -312,7 +314,7 @@ class OpenAIEndpoint(BaseEndpoint):
         started = time.monotonic()
 
         if self.endpoint.openai_mode == "transcriptions":
-            asr_text = transcript or self._transcribe(target)
+            asr_text = transcript or self._transcribe(target, prompt=prompt)
             if mode == "transcribe":
                 return ProcessingResult(
                     text=asr_text,
