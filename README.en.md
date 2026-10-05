@@ -52,6 +52,7 @@ omni-media/
 ├── omni_media/              # the only implementation package
 │   └── config.example.json  # the only config template (shipped with the package)
 ├── tests/
+├── examples/                # manual verification: run read_audio / read_media against a real endpoint
 ├── selfcheck.py             # 5-part architecture self-check
 └── pyproject.toml           # dependencies and the 4 launchers
 ```

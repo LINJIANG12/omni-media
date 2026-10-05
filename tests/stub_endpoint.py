@@ -8,7 +8,7 @@
 `POST /v1beta/models/<m>:generateContent`   Gemini `inlineData`
 `POST /v1/chat/completions`                 OpenAI chat（含 `input_audio`）
 `POST /v1/audio/transcriptions`             OpenAI 转录（multipart）
-`GET  /v1/models`、`GET /v1beta/models`      `status --probe` 用
+`GET  /v1/models`、`GET /v1beta/models`      路由形状覆盖用
 ===================================  ==========================================
 
 它会把每个收到的请求原样记录下来（方法、路径、头、原始字节），测试据此断言
